@@ -5,6 +5,7 @@ import numpy as np
 import requests
 import json
 import os
+import altair as alt
 
 # --- Databas för Sparlistan ---
 DB_FILE = "watchlist.json"
@@ -18,6 +19,22 @@ def load_watchlist():
 def save_watchlist(watchlist):
     with open(DB_FILE, "w") as f:
         json.dump(watchlist, f)
+
+# --- Ticker-listor för Top-listan ---
+STHLM_TICKERS = [
+    "VOLV-B.ST", "INVE-B.ST", "ATCO-A.ST", "HM-B.ST", "SEB-A.ST", 
+    "SHB-A.ST", "SWED-A.ST", "ERIC-B.ST", "ASSA-B.ST", "EVO.ST", 
+    "HEXA-B.ST", "SAND.ST", "NIBE-B.ST", "SCA-B.ST", "TELIA.ST", 
+    "ALFA.ST", "SKF-B.ST", "BOL.ST", "GETI-B.ST", "SINCH.ST",
+    "KINV-B.ST", "LATB.ST", "EPI-A.ST", "INDU-C.ST", "SAAB-B.ST"
+]
+
+NASDAQ_TICKERS = [
+    "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", 
+    "NFLX", "ADBE", "AMD", "INTC", "CSCO", "PEP", "AVGO", 
+    "TXN", "QCOM", "COST", "AMGN", "INTU", "SBUX", "PYPL",
+    "AMAT", "MU", "CRWD", "PANW"
+]
 
 # --- Sökmotor för företagsnamn ---
 def search_ticker_by_name(query):
@@ -74,17 +91,17 @@ def generate_insights(pe, peg, div, rsi, ma50, ma200, beta):
     risks = []
     
     if pe is not None and not pd.isna(pe) and pe > 0:
-        if pe < 15: positives.append("Låg värdering (P/E under 15). Aktien kan vara prisvärd.")
-        elif pe > 30: risks.append("Mycket hög värdering (P/E över 30). Känslig för besvikelser.")
+        if pe < 15: positives.append("Låg värdering (P/E under 15).")
+        elif pe > 30: risks.append("Mycket hög värdering (P/E över 30).")
         
     if peg is not None and not pd.isna(peg) and peg > 0:
-        if peg < 1.0: positives.append("Bolaget växer snabbt i förhållande till sin prislapp (PEG under 1.0).")
-        elif peg > 2.0: risks.append("Tillväxttakten motiverar kanske inte den höga prislappen (PEG över 2.0).")
+        if peg < 1.0: positives.append("Bolaget växer snabbt mot prislappen (PEG under 1.0).")
+        elif peg > 2.0: risks.append("Tillväxttakten motiverar kanske inte prislappen (PEG över 2.0).")
         
     if div is not None and not pd.isna(div) and div > 0.03:
-        positives.append(f"Hög direktavkastning ({round(div*100,1)}%). Ger stabil krockkudde.")
+        positives.append(f"Hög direktavkastning ({round(div*100,1)}%).")
     elif div is None or pd.isna(div) or div == 0:
-        risks.append("Ger ingen utdelning. Avkastningen hänger helt på kursuppgång.")
+        risks.append("Ger ingen utdelning.")
         
     if ma50 is not None and ma200 is not None and not pd.isna(ma50) and not pd.isna(ma200):
         if ma50 > ma200: positives.append("Teknisk styrka: Långsiktig uppåttrend (Golden Cross).")
@@ -92,13 +109,13 @@ def generate_insights(pe, peg, div, rsi, ma50, ma200, beta):
         
     if rsi is not None and not pd.isna(rsi):
         if rsi < 30: positives.append("Kortsiktigt översåld. Kan finnas köpläge.")
-        elif rsi > 70: risks.append("Kortsiktigt överköpt. Risk för tillfällig rekyl nedåt.")
+        elif rsi > 70: risks.append("Kortsiktigt överköpt. Risk för tillfällig rekyl.")
         
     if beta is not None and not pd.isna(beta) and beta > 1.3:
-        risks.append("Hög volatilitet (Beta över 1.3). Aktien svänger kraftigare än börsen.")
+        risks.append("Hög volatilitet (Beta över 1.3). Svänger mer än börsen.")
         
-    if not positives: positives.append("Hittar inga extremt utmärkande styrkor i datan.")
-    if not risks: risks.append("Hittar inga uppenbara röda flaggor i datan.")
+    if not positives: positives.append("Hittar inga utmärkande styrkor.")
+    if not risks: risks.append("Hittar inga uppenbara röda flaggor.")
         
     return positives, risks
 
@@ -183,6 +200,12 @@ def get_historical_scores(ticker_symbol, current_pe, current_peg, dividend, reco
     current_price = safe_val(hist['Close'].iloc[-1])
     eps = current_price / current_pe if (current_price and current_pe and current_pe > 0) else None
     
+    swe_months = {
+        1: "Januari", 2: "Februari", 3: "Mars", 4: "April",
+        5: "Maj", 6: "Juni", 7: "Juli", 8: "Augusti",
+        9: "September", 10: "Oktober", 11: "November", 12: "December"
+    }
+    
     history_dict = {}
     
     for date, row in monthly_data.iterrows():
@@ -200,7 +223,7 @@ def get_historical_scores(ticker_symbol, current_pe, current_peg, dividend, reco
             safe_val(row['MA50']), safe_val(row['MA200'])
         )
         
-        month_str = date.strftime('%Y-%m')
+        month_str = f"{swe_months[date.month]} '{str(date.year)[-2:]}"
         history_dict[month_str] = s
         
     return history_dict
@@ -250,7 +273,8 @@ def fetch_stock_data(ticker_symbol):
         'info': info, 'score': score, 'breakdown': breakdown, 
         'pe': pe, 'peg': peg, 'div': div, 'rsi': rsi, 'ma50': ma50, 'ma200': ma200,
         'positives': positives, 'risks': risks,
-        'hist_5y': hist_5y, 'historical_scores': historical_scores
+        'hist_5y': hist_5y, 'historical_scores': historical_scores,
+        'ticker': ticker_symbol
     }
 
 # --- Streamlit Gränssnitt ---
@@ -260,35 +284,43 @@ if 'current_ticker' not in st.session_state:
     st.session_state.current_ticker = None
 if 'stock_data' not in st.session_state:
     st.session_state.stock_data = None
-# Nytt minne för sparlistan så datan stannar kvar!
 if 'watchlist_data' not in st.session_state:
     st.session_state.watchlist_data = {}
+if 'search_options' not in st.session_state:
+    st.session_state.search_options = []
+# Minne för Toplistan
+if 'toplist_results' not in st.session_state:
+    st.session_state.toplist_results = []
 
-tab1, tab2 = st.tabs(["🔍 Sök & Analysera", "⭐ Min Sparlista"])
+# Tredje fliken tillagd!
+tab1, tab2, tab3 = st.tabs(["🔍 Sök & Analysera", "⭐ Min Sparlista", "🏆 Top listan"])
 
+# --- FLIK 1: Sök & Analysera ---
 with tab1:
     st.title("📈 Aktierankaren")
     st.write("Sök på ett företagsnamn (t.ex. Google eller Investor).")
 
-    name_query = st.text_input("Skriv företagsnamn eller ticker:", "")
-    
-    if name_query:
-        suggestions = search_ticker_by_name(name_query)
-        if suggestions:
-            selected_option = st.selectbox("Välj rätt aktie från listan:", suggestions)
-            ticker_to_analyze = selected_option.split(" - ")[0]
-            
-            if st.button("Hämta Ranking"):
-                with st.spinner(f"Analyserar {ticker_to_analyze}..."):
-                    st.session_state.current_ticker = ticker_to_analyze
-                    data = fetch_stock_data(ticker_to_analyze)
-                    if data:
-                        st.session_state.stock_data = data
-                    else:
-                        st.error("Kunde tyvärr inte hämta data för denna aktie just nu.")
-                        st.session_state.stock_data = None
-        else:
-            st.warning("Hittade inga aktier med det namnet.")
+    with st.form("search_form"):
+        name_query = st.text_input("1. Sök företagsnamn eller ticker:", "")
+        search_submitted = st.form_submit_button("Sök i registret")
+        
+        if search_submitted and name_query:
+            with st.spinner("Letar upp aktien..."):
+                st.session_state.search_options = search_ticker_by_name(name_query)
+
+    if st.session_state.search_options:
+        selected_option = st.selectbox("2. Välj rätt aktie från listan:", st.session_state.search_options)
+        ticker_to_analyze = selected_option.split(" - ")[0]
+        
+        if st.button("Hämta Ranking", type="primary"):
+            with st.spinner(f"Analyserar {ticker_to_analyze}..."):
+                st.session_state.current_ticker = ticker_to_analyze
+                data = fetch_stock_data(ticker_to_analyze)
+                if data:
+                    st.session_state.stock_data = data
+                else:
+                    st.error("Kunde tyvärr inte hämta data för denna aktie just nu.")
+                    st.session_state.stock_data = None
 
     if st.session_state.current_ticker and st.session_state.stock_data:
         data = st.session_state.stock_data
@@ -299,7 +331,7 @@ with tab1:
         
         watchlist = load_watchlist()
         if ticker not in watchlist:
-            if st.button("⭐ Spara till Watchlist", key="save_btn"):
+            if st.button("⭐ Spara till Watchlist", key="save_btn_search"):
                 watchlist.append(ticker)
                 save_watchlist(watchlist)
                 st.success(f"{ticker} sparades i din lista!")
@@ -338,27 +370,39 @@ with tab1:
         st.markdown("---")
         st.markdown("### 📅 Poänghistorik (Senaste 12 månaderna)")
         if data['historical_scores']:
-            hist_df = pd.DataFrame.from_dict(data['historical_scores'], orient='index', columns=['Poäng'])
-            st.bar_chart(hist_df)
-        else:
-            st.write("Kunde inte hämta historik för att räkna ut poäng bakåt i tiden.")
+            hist_df = pd.DataFrame({
+                'Månad': list(data['historical_scores'].keys()),
+                'Poäng': list(data['historical_scores'].values())
+            })
+            
+            bar_chart = alt.Chart(hist_df).mark_bar(color='#2ecc71').encode(
+                x=alt.X('Månad', sort=None, title=''),
+                y=alt.Y('Poäng', title='Poäng', scale=alt.Scale(domain=[0, 100])),
+                tooltip=['Månad', 'Poäng']
+            )
+            st.altair_chart(bar_chart, use_container_width=True)
 
         st.markdown("### 📈 Kursutveckling (Senaste 5 åren)")
         if not data['hist_5y'].empty:
-            st.line_chart(data['hist_5y'])
-        else:
-            st.write("Kunde inte hämta 5 års historik för denna aktie.")
+            df_5y = data['hist_5y'].reset_index()
+            df_5y.columns = ['Datum', 'Pris']
+            
+            line_chart = alt.Chart(df_5y).mark_line(color='#3498db').encode(
+                x=alt.X('Datum', title=''),
+                y=alt.Y('Pris', title='Aktiekurs', scale=alt.Scale(zero=False)),
+                tooltip=['Datum', 'Pris']
+            )
+            st.altair_chart(line_chart, use_container_width=True)
 
+# --- FLIK 2: Min Sparlista ---
 with tab2:
     st.title("⭐ Min Sparlista")
-    st.write("Här är dina sparade aktier.")
     
     watchlist = load_watchlist()
     
     if len(watchlist) == 0:
         st.write("Din sparlista är tom.")
     else:
-        # Uppdateringsknapp längst upp
         if st.button("🔄 Uppdatera alla poäng", key="update_all"):
             for ticker_symbol in watchlist:
                 with st.spinner(f"Hämtar data för {ticker_symbol}..."):
@@ -368,11 +412,8 @@ with tab2:
 
         st.markdown("---")
         
-        # Loopa igenom och visa alla aktier i listan (oavsett om de är uppdaterade eller ej)
         for ticker in watchlist:
-            # Skapa 3 kolumner: Namn, Poäng, och Ta bort-knapp (X)
             col_name, col_score, col_del = st.columns([5, 3, 1])
-            
             data = st.session_state.watchlist_data.get(ticker)
             
             with col_name:
@@ -390,16 +431,13 @@ with tab2:
                     st.markdown("*(Inte uppdaterad)*")
                     
             with col_del:
-                # Ett enkelt kryss för att ta bort aktien snabbt
                 if st.button("❌", key=f"del_{ticker}"):
                     watchlist.remove(ticker)
                     save_watchlist(watchlist)
-                    # Ta även bort datan från minnet
                     if ticker in st.session_state.watchlist_data:
                         del st.session_state.watchlist_data[ticker]
                     st.rerun()
             
-            # Visa detaljer om vi har hämtat data
             if data:
                 with st.expander("Visa insikter"):
                     col_pos, col_neg = st.columns(2)
@@ -409,5 +447,72 @@ with tab2:
                         st.error("\n".join([f"- {r}" for r in data['risks']]))
                         
                     st.write(f"**Snabbfakta:** P/E: {round(data['pe'], 2) if data['pe'] else '-'} | PEG: {round(data['peg'], 2) if data['peg'] else '-'} | Utdelning: {round(data['div'] * 100, 2) if data['div'] else 0}% | RSI: {round(data['rsi'], 0) if data['rsi'] else '-'}")
+            st.markdown("---")
+
+# --- FLIK 3: Top Listan ---
+with tab3:
+    st.title("🏆 Top listan (Vinnarna just nu)")
+    st.write("Skanna marknaden för att hitta aktierna med högst algoritmpoäng. Appen letar bland de mest omsatta bolagen på vald börs.")
+    
+    exchange_choice = st.selectbox("Vilken marknad vill du scanna?", ["Stockholmsbörsen (Top 25)", "Nasdaq US (Top 25 Tech)"])
+    
+    if st.button("🔍 Scanna Marknaden (Tar ca 10 sekunder)", type="primary"):
+        tickers_to_scan = STHLM_TICKERS if "Stockholm" in exchange_choice else NASDAQ_TICKERS
+        
+        # En snygg laddningsmätare
+        progress_text = "Skannar bolagen, ett ögonblick..."
+        my_bar = st.progress(0, text=progress_text)
+        
+        results = []
+        for i, ticker in enumerate(tickers_to_scan):
+            data = fetch_stock_data(ticker)
+            if data:
+                results.append(data)
+            # Uppdatera mätaren
+            my_bar.progress((i + 1) / len(tickers_to_scan), text=f"Analyserar {ticker} ({i+1}/{len(tickers_to_scan)})...")
+        
+        # Sortera resultat efter poäng (högst först)
+        top_10 = sorted(results, key=lambda x: x['score'], reverse=True)[:10]
+        st.session_state.toplist_results = top_10
+        
+        my_bar.empty() # Ta bort laddningsmätaren när det är klart
+        st.success("Skanning klar! Här är top 10:")
+
+    # Visa resultaten om de finns i minnet
+    if st.session_state.toplist_results:
+        st.markdown(f"### 🔥 Topp 10: {exchange_choice}")
+        
+        watchlist = load_watchlist()
+        
+        for rank, data in enumerate(st.session_state.toplist_results, 1):
+            ticker = data['ticker']
+            score = data['score']
+            name = data['info'].get('shortName', ticker)
+            
+            # Färgkodning på poängen
+            color = "green" if score >= 75 else "orange" if score >= 50 else "red"
+            
+            with st.container():
+                st.markdown(f"#### #{rank} | {name} ({ticker})")
+                
+                col1, col2, col3 = st.columns([2, 4, 2])
+                
+                with col1:
+                    st.markdown(f"<h2 style='color: {color}; margin-top:0;'>{score}/100</h2>", unsafe_allow_html=True)
                     
-            st.markdown("---") # Linje mellan varje aktie i listan
+                with col2:
+                    st.write(f"**P/E:** {round(data['pe'], 1) if data['pe'] else '-'} | **RSI:** {round(data['rsi'], 0) if data['rsi'] else '-'}")
+                    trend_val = (data['ma50'] - data['ma200']) if (data['ma50'] and data['ma200']) else None
+                    st.write(f"**Trend:** {get_label(trend_val, 'trend').replace('(', '').replace(')', '')}")
+                    
+                with col3:
+                    if ticker not in watchlist:
+                        if st.button("⭐ Spara", key=f"top_{ticker}"):
+                            watchlist.append(ticker)
+                            save_watchlist(watchlist)
+                            st.success("Sparad!")
+                            st.rerun()
+                    else:
+                        st.markdown("⭐ *Sparad*")
+                        
+                st.markdown("---")
