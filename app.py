@@ -149,7 +149,6 @@ def calculate_score_100(pe, peg, dividend, recommendation, rsi, macd_diff, ma50,
 
     return score, details
 
-# --- Hjälpfunktion för att städa bort saknade värden (NaN) ---
 def safe_val(val):
     if pd.isna(val):
         return None
@@ -176,7 +175,6 @@ def get_historical_scores(ticker_symbol, current_pe, current_peg, dividend, reco
     hist['MA50'] = hist['Close'].rolling(window=50).mean()
     hist['MA200'] = hist['Close'].rolling(window=200).mean()
     
-    # Hanterar pandas uppdatering (ME istället för M)
     try:
         monthly_data = hist.resample('ME').last().tail(12)
     except Exception:
@@ -221,14 +219,12 @@ def fetch_stock_data(ticker_symbol):
     beta = info.get('beta', None)
     recommendation = info.get('recommendationKey', None)
     
-    # Krockkudde för 5-årsgrafen
     hist_5y_data = ticker.history(period="5y")
     if not hist_5y_data.empty and 'Close' in hist_5y_data.columns:
         hist_5y = hist_5y_data['Close']
     else:
         hist_5y = pd.Series()
     
-    # Dagens tekniska indikatorer
     hist_1y = ticker.history(period="1y") 
     rsi = macd_diff = ma50 = ma200 = None
     if not hist_1y.empty and len(hist_1y) >= 200:
@@ -264,6 +260,9 @@ if 'current_ticker' not in st.session_state:
     st.session_state.current_ticker = None
 if 'stock_data' not in st.session_state:
     st.session_state.stock_data = None
+# Nytt minne för sparlistan så datan stannar kvar!
+if 'watchlist_data' not in st.session_state:
+    st.session_state.watchlist_data = {}
 
 tab1, tab2 = st.tabs(["🔍 Sök & Analysera", "⭐ Min Sparlista"])
 
@@ -308,12 +307,10 @@ with tab1:
         else:
             st.info("⭐ Sparad i din Watchlist")
 
-        # Totalpoäng
         score = data['score']
         color = "green" if score >= 75 else "orange" if score >= 50 else "red"
         st.markdown(f"<h1 style='text-align: center; color: {color}; font-size: 80px;'>{score} / 100</h1>", unsafe_allow_html=True)
 
-        # Risker och möjligheter
         st.markdown("### 💡 Insikter om aktien")
         col_pos, col_neg = st.columns(2)
         with col_pos:
@@ -321,7 +318,6 @@ with tab1:
         with col_neg:
             st.error("**Risker:**\n" + "\n".join([f"- {r}" for r in data['risks']]))
 
-        # Datasammanfattning med etiketter
         st.markdown("### 📊 Uppdelning av data")
         col1, col2 = st.columns(2)
         with col1:
@@ -339,15 +335,13 @@ with tab1:
             for k, v in data['breakdown'].items():
                 st.write(f"**{k}:** {v}")
 
-        # Nya historiska grafer
         st.markdown("---")
         st.markdown("### 📅 Poänghistorik (Senaste 12 månaderna)")
-        st.write("Visar vilken poäng aktien hade i slutet av varje månad, ett år tillbaka.")
         if data['historical_scores']:
             hist_df = pd.DataFrame.from_dict(data['historical_scores'], orient='index', columns=['Poäng'])
             st.bar_chart(hist_df)
         else:
-            st.write("Kunde inte hämta tillräckligt med historik för att räkna ut poäng bakåt i tiden.")
+            st.write("Kunde inte hämta historik för att räkna ut poäng bakåt i tiden.")
 
         st.markdown("### 📈 Kursutveckling (Senaste 5 åren)")
         if not data['hist_5y'].empty:
@@ -364,24 +358,56 @@ with tab2:
     if len(watchlist) == 0:
         st.write("Din sparlista är tom.")
     else:
-        if st.button("🔄 Uppdatera alla poäng nu"):
+        # Uppdateringsknapp längst upp
+        if st.button("🔄 Uppdatera alla poäng", key="update_all"):
             for ticker_symbol in watchlist:
                 with st.spinner(f"Hämtar data för {ticker_symbol}..."):
                     data = fetch_stock_data(ticker_symbol)
-                    
                     if data:
-                        with st.expander(f"{ticker_symbol} - {data['info'].get('shortName', '')} (Poäng: {data['score']}/100)"):
-                            score = data['score']
-                            color = "green" if score >= 75 else "orange" if score >= 50 else "red"
-                            st.markdown(f"<h3 style='color: {color};'>{score} / 100</h3>", unsafe_allow_html=True)
-                            
-                            col_pos, col_neg = st.columns(2)
-                            with col_pos:
-                                st.success("\n".join([f"- {p}" for p in data['positives']]))
-                            with col_neg:
-                                st.error("\n".join([f"- {r}" for r in data['risks']]))
-                            
-                            if st.button(f"Ta bort {ticker_symbol} från listan", key=f"del_{ticker_symbol}"):
-                                watchlist.remove(ticker_symbol)
-                                save_watchlist(watchlist)
-                                st.rerun()
+                        st.session_state.watchlist_data[ticker_symbol] = data
+
+        st.markdown("---")
+        
+        # Loopa igenom och visa alla aktier i listan (oavsett om de är uppdaterade eller ej)
+        for ticker in watchlist:
+            # Skapa 3 kolumner: Namn, Poäng, och Ta bort-knapp (X)
+            col_name, col_score, col_del = st.columns([5, 3, 1])
+            
+            data = st.session_state.watchlist_data.get(ticker)
+            
+            with col_name:
+                if data:
+                    st.markdown(f"**{ticker}** - {data['info'].get('shortName', '')}")
+                else:
+                    st.markdown(f"**{ticker}**")
+                    
+            with col_score:
+                if data:
+                    score = data['score']
+                    color = "green" if score >= 75 else "orange" if score >= 50 else "red"
+                    st.markdown(f"<span style='color:{color}; font-weight:bold; font-size:18px;'>{score} / 100</span>", unsafe_allow_html=True)
+                else:
+                    st.markdown("*(Inte uppdaterad)*")
+                    
+            with col_del:
+                # Ett enkelt kryss för att ta bort aktien snabbt
+                if st.button("❌", key=f"del_{ticker}"):
+                    watchlist.remove(ticker)
+                    save_watchlist(watchlist)
+                    # Ta även bort datan från minnet
+                    if ticker in st.session_state.watchlist_data:
+                        del st.session_state.watchlist_data[ticker]
+                    st.rerun()
+            
+            # Visa detaljer om vi har hämtat data
+            if data:
+                with st.expander("Visa insikter"):
+                    col_pos, col_neg = st.columns(2)
+                    with col_pos:
+                        st.success("\n".join([f"- {p}" for p in data['positives']]))
+                    with col_neg:
+                        st.error("\n".join([f"- {r}" for r in data['risks']]))
+                        
+                    st.write(f"**Snabbfakta:** P/E: {round(data['pe'], 2) if data['pe'] else '-'} | PEG: {round(data['peg'], 2) if data['peg'] else '-'} | Utdelning: {round(data['div'] * 100, 2) if data['div'] else 0}% | RSI: {round(data['rsi'], 0) if data['rsi'] else '-'}")
+                    
+            st.markdown("---") # Linje mellan varje aktie i listan
