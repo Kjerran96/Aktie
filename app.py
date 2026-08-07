@@ -39,7 +39,7 @@ def search_ticker_by_name(query):
 
 # --- Smarta etiketter (Bra, Medel, Dålig) ---
 def get_label(value, metric_type):
-    if value is None:
+    if value is None or pd.isna(value):
         return "(Saknas)"
     
     if metric_type == 'pe':
@@ -53,7 +53,7 @@ def get_label(value, metric_type):
         else: return "(Dålig 🔴)"
         
     elif metric_type == 'div':
-        if value > 0.03: return "(Bra 🟢)" # Över 3% är bra
+        if value > 0.03: return "(Bra 🟢)" 
         elif value > 0: return "(Medel 🟡)"
         else: return "(Dålig 🔴)"
         
@@ -68,33 +68,33 @@ def get_label(value, metric_type):
         
     return ""
 
-# --- Smart insiktsgenerator (Risker & Möjligheter) ---
+# --- Smart insiktsgenerator ---
 def generate_insights(pe, peg, div, rsi, ma50, ma200, beta):
     positives = []
     risks = []
     
-    if pe is not None and pe > 0:
+    if pe is not None and not pd.isna(pe) and pe > 0:
         if pe < 15: positives.append("Låg värdering (P/E under 15). Aktien kan vara prisvärd.")
         elif pe > 30: risks.append("Mycket hög värdering (P/E över 30). Känslig för besvikelser.")
         
-    if peg is not None and peg > 0:
+    if peg is not None and not pd.isna(peg) and peg > 0:
         if peg < 1.0: positives.append("Bolaget växer snabbt i förhållande till sin prislapp (PEG under 1.0).")
         elif peg > 2.0: risks.append("Tillväxttakten motiverar kanske inte den höga prislappen (PEG över 2.0).")
         
-    if div is not None and div > 0.03:
+    if div is not None and not pd.isna(div) and div > 0.03:
         positives.append(f"Hög direktavkastning ({round(div*100,1)}%). Ger stabil krockkudde.")
-    elif div is None or div == 0:
+    elif div is None or pd.isna(div) or div == 0:
         risks.append("Ger ingen utdelning. Avkastningen hänger helt på kursuppgång.")
         
-    if ma50 is not None and ma200 is not None:
+    if ma50 is not None and ma200 is not None and not pd.isna(ma50) and not pd.isna(ma200):
         if ma50 > ma200: positives.append("Teknisk styrka: Långsiktig uppåttrend (Golden Cross).")
         else: risks.append("Teknisk svaghet: Långsiktig nedåttrend.")
         
-    if rsi is not None:
+    if rsi is not None and not pd.isna(rsi):
         if rsi < 30: positives.append("Kortsiktigt översåld. Kan finnas köpläge.")
         elif rsi > 70: risks.append("Kortsiktigt överköpt. Risk för tillfällig rekyl nedåt.")
         
-    if beta is not None and beta > 1.3:
+    if beta is not None and not pd.isna(beta) and beta > 1.3:
         risks.append("Hög volatilitet (Beta över 1.3). Aktien svänger kraftigare än börsen.")
         
     if not positives: positives.append("Hittar inga extremt utmärkande styrkor i datan.")
@@ -102,24 +102,24 @@ def generate_insights(pe, peg, div, rsi, ma50, ma200, beta):
         
     return positives, risks
 
-# --- Algoritmen för poängberäkning (Max 100 poäng) ---
+# --- Algoritmen för poängberäkning ---
 def calculate_score_100(pe, peg, dividend, recommendation, rsi, macd_diff, ma50, ma200):
     score = 0
     details = {}
 
-    if pe is not None and pe > 0:
+    if pe is not None and not pd.isna(pe) and pe > 0:
         if pe < 15: score += 15; details['P/E'] = "15 p"
         elif 15 <= pe <= 25: score += 7; details['P/E'] = "7 p"
         else: details['P/E'] = "0 p"
     else: details['P/E'] = "0 p"
 
-    if peg is not None and peg > 0:
+    if peg is not None and not pd.isna(peg) and peg > 0:
         if peg < 1.0: score += 15; details['PEG'] = "15 p"
         elif 1.0 <= peg <= 1.5: score += 7; details['PEG'] = "7 p"
         else: details['PEG'] = "0 p"
     else: details['PEG'] = "0 p"
 
-    if recommendation:
+    if recommendation and isinstance(recommendation, str):
         rec = recommendation.lower()
         if 'strong_buy' in rec: score += 20; details['Analytiker'] = "20 p"
         elif 'buy' in rec: score += 15; details['Analytiker'] = "15 p"
@@ -127,33 +127,39 @@ def calculate_score_100(pe, peg, dividend, recommendation, rsi, macd_diff, ma50,
         else: details['Analytiker'] = "0 p"
     else: details['Analytiker'] = "0 p"
 
-    if macd_diff is not None:
+    if macd_diff is not None and not pd.isna(macd_diff):
         if macd_diff > 0: score += 15; details['MACD'] = "15 p"
         else: details['MACD'] = "0 p"
     else: details['MACD'] = "0 p"
 
-    if ma50 is not None and ma200 is not None:
+    if ma50 is not None and ma200 is not None and not pd.isna(ma50) and not pd.isna(ma200):
         if ma50 > ma200: score += 15; details['Golden Cross'] = "15 p"
         else: details['Golden Cross'] = "0 p"
     else: details['Golden Cross'] = "0 p"
 
-    if rsi is not None:
+    if rsi is not None and not pd.isna(rsi):
         if rsi < 30: score += 10; details['RSI'] = "10 p"
         elif 30 <= rsi <= 70: score += 5; details['RSI'] = "5 p"
         else: details['RSI'] = "0 p"
     else: details['RSI'] = "0 p"
         
-    if dividend is not None and dividend > 0:
+    if dividend is not None and not pd.isna(dividend) and dividend > 0:
         score += 10; details['Utdelning'] = "10 p"
     else: details['Utdelning'] = "0 p"
 
     return score, details
 
-# --- Historisk Tidsmaskin (Beräknar poäng bakåt i tiden) ---
+# --- Hjälpfunktion för att städa bort saknade värden (NaN) ---
+def safe_val(val):
+    if pd.isna(val):
+        return None
+    return float(val)
+
+# --- Historisk Tidsmaskin ---
 def get_historical_scores(ticker_symbol, current_pe, current_peg, dividend, recommendation):
     ticker = yf.Ticker(ticker_symbol)
-    # Hämta 2 års data för att ha 200 dagars glidande medelvärde även för 1 år sedan
     hist = ticker.history(period="2y")
+    
     if hist.empty or len(hist) < 200:
         return None
         
@@ -170,28 +176,33 @@ def get_historical_scores(ticker_symbol, current_pe, current_peg, dividend, reco
     hist['MA50'] = hist['Close'].rolling(window=50).mean()
     hist['MA200'] = hist['Close'].rolling(window=200).mean()
     
-    # Plocka ut sista handelsdagen för varje månad, 12 månader bakåt
-    monthly_data = hist.resample('M').last().tail(12)
+    # Hanterar pandas uppdatering (ME istället för M)
+    try:
+        monthly_data = hist.resample('ME').last().tail(12)
+    except Exception:
+        monthly_data = hist.resample('M').last().tail(12)
     
-    current_price = hist['Close'].iloc[-1]
-    eps = current_price / current_pe if current_pe and current_pe > 0 else None
+    current_price = safe_val(hist['Close'].iloc[-1])
+    eps = current_price / current_pe if (current_price and current_pe and current_pe > 0) else None
     
     history_dict = {}
     
     for date, row in monthly_data.iterrows():
-        hist_pe = row['Close'] / eps if eps else None
-        
-        hist_div = None
-        if dividend and current_price:
-            hist_div = (dividend * current_price) / row['Close']
+        close_price = safe_val(row['Close'])
+        if not close_price:
+            continue
             
-        hist_peg = None
-        if current_peg and current_pe and current_pe > 0:
-            hist_peg = current_peg * (hist_pe / current_pe) if hist_pe else None
+        hist_pe = close_price / eps if eps else None
+        hist_div = (dividend * current_price) / close_price if (dividend and current_price) else None
+        hist_peg = current_peg * (hist_pe / current_pe) if (current_peg and current_pe and current_pe > 0 and hist_pe) else None
 
-        s, _ = calculate_score_100(hist_pe, hist_peg, hist_div, recommendation, row['RSI'], row['MACD_Diff'], row['MA50'], row['MA200'])
+        s, _ = calculate_score_100(
+            hist_pe, hist_peg, hist_div, recommendation, 
+            safe_val(row['RSI']), safe_val(row['MACD_Diff']), 
+            safe_val(row['MA50']), safe_val(row['MA200'])
+        )
         
-        month_str = date.strftime('%Y-%m') # Blir t.ex. 2025-08
+        month_str = date.strftime('%Y-%m')
         history_dict[month_str] = s
         
     return history_dict
@@ -210,7 +221,12 @@ def fetch_stock_data(ticker_symbol):
     beta = info.get('beta', None)
     recommendation = info.get('recommendationKey', None)
     
-    hist_5y = ticker.history(period="5y")['Close']
+    # Krockkudde för 5-årsgrafen
+    hist_5y_data = ticker.history(period="5y")
+    if not hist_5y_data.empty and 'Close' in hist_5y_data.columns:
+        hist_5y = hist_5y_data['Close']
+    else:
+        hist_5y = pd.Series()
     
     # Dagens tekniska indikatorer
     hist_1y = ticker.history(period="1y") 
@@ -220,14 +236,14 @@ def fetch_stock_data(ticker_symbol):
         gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
         rs = gain / loss
-        rsi = (100 - (100 / (1 + rs))).iloc[-1]
+        rsi = safe_val((100 - (100 / (1 + rs))).iloc[-1])
         
         exp1 = hist_1y['Close'].ewm(span=12, adjust=False).mean()
         exp2 = hist_1y['Close'].ewm(span=26, adjust=False).mean()
         macd = exp1 - exp2
-        macd_diff = (macd - macd.ewm(span=9, adjust=False).mean()).iloc[-1]
-        ma50 = hist_1y['Close'].rolling(window=50).mean().iloc[-1]
-        ma200 = hist_1y['Close'].rolling(window=200).mean().iloc[-1]
+        macd_diff = safe_val((macd - macd.ewm(span=9, adjust=False).mean()).iloc[-1])
+        ma50 = safe_val(hist_1y['Close'].rolling(window=50).mean().iloc[-1])
+        ma200 = safe_val(hist_1y['Close'].rolling(window=200).mean().iloc[-1])
 
     score, breakdown = calculate_score_100(pe, peg, div, recommendation, rsi, macd_diff, ma50, ma200)
     positives, risks = generate_insights(pe, peg, div, rsi, ma50, ma200, beta)
@@ -266,7 +282,12 @@ with tab1:
             if st.button("Hämta Ranking"):
                 with st.spinner(f"Analyserar {ticker_to_analyze}..."):
                     st.session_state.current_ticker = ticker_to_analyze
-                    st.session_state.stock_data = fetch_stock_data(ticker_to_analyze)
+                    data = fetch_stock_data(ticker_to_analyze)
+                    if data:
+                        st.session_state.stock_data = data
+                    else:
+                        st.error("Kunde tyvärr inte hämta data för denna aktie just nu.")
+                        st.session_state.stock_data = None
         else:
             st.warning("Hittade inga aktier med det namnet.")
 
@@ -323,7 +344,6 @@ with tab1:
         st.markdown("### 📅 Poänghistorik (Senaste 12 månaderna)")
         st.write("Visar vilken poäng aktien hade i slutet av varje månad, ett år tillbaka.")
         if data['historical_scores']:
-            # Streamlit bar_chart är perfekt för detta
             hist_df = pd.DataFrame.from_dict(data['historical_scores'], orient='index', columns=['Poäng'])
             st.bar_chart(hist_df)
         else:
