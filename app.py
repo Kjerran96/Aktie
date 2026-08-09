@@ -60,10 +60,22 @@ def search_ticker_by_name(query):
     except Exception:
         return []
 
+# --- Enkel Ord-skanner för Nyhetsvärdering (Sentiment) ---
+def analyze_news_sentiment(title):
+    title_lower = title.lower()
+    pos_words = ['up', 'higher', 'jump', 'surge', 'buy', 'growth', 'profit', 'beat', 'bull', 'upgrade', 'high', 'dividend', 'upp', 'köp', 'vinst', 'höjer', 'stiger', 'lyfter', 'rekord', 'soar']
+    neg_words = ['down', 'lower', 'fall', 'drop', 'plunge', 'sell', 'loss', 'miss', 'bear', 'downgrade', 'low', 'lawsuit', 'ner', 'sälj', 'förlust', 'sänker', 'ras', 'rasar', 'stämning', 'böter', 'slump', 'shrink']
+    
+    pos_score = sum(1 for w in pos_words if f" {w} " in f" {title_lower} " or title_lower.startswith(f"{w} ") or title_lower.endswith(f" {w}"))
+    neg_score = sum(1 for w in neg_words if f" {w} " in f" {title_lower} " or title_lower.startswith(f"{w} ") or title_lower.endswith(f" {w}"))
+    
+    if pos_score > neg_score: return "positive"
+    elif neg_score > pos_score: return "negative"
+    else: return "neutral"
+
 # --- Smarta etiketter (Bra, Medel, Dålig) ---
 def get_label(value, metric_type):
-    if value is None or pd.isna(value):
-        return "(Saknas)"
+    if value is None or pd.isna(value): return "(Saknas)"
     
     if metric_type == 'pe':
         if value < 15: return "(Bra 🟢)"
@@ -248,11 +260,25 @@ def fetch_stock_data(ticker_symbol):
     beta = info.get('beta', None)
     recommendation = info.get('recommendationKey', None)
     
-    # Hämta nyheter
+    # Hämta och analysera nyheter
+    news = {'positive': [], 'negative': [], 'neutral': []}
     try:
-        news = ticker.news[:3]
+        raw_news = ticker.news[:15] # Hämta 15 stycken för att ha material att sortera
+        for n in raw_news:
+            title = n.get('title') or n.get('headline')
+            if not title:
+                continue
+            
+            sentiment = analyze_news_sentiment(title)
+            
+            if sentiment == 'positive' and len(news['positive']) < 2:
+                news['positive'].append(n)
+            elif sentiment == 'negative' and len(news['negative']) < 2:
+                news['negative'].append(n)
+            elif sentiment == 'neutral' and len(news['neutral']) < 3:
+                news['neutral'].append(n)
     except Exception:
-        news = []
+        pass
     
     hist_5y_data = ticker.history(period="5y")
     if not hist_5y_data.empty and 'Close' in hist_5y_data.columns:
@@ -300,11 +326,9 @@ if 'watchlist_data' not in st.session_state:
     st.session_state.watchlist_data = {}
 if 'search_options' not in st.session_state:
     st.session_state.search_options = []
-# Minne för Toplistan
 if 'toplist_results' not in st.session_state:
     st.session_state.toplist_results = []
 
-# Tre flikar
 tab1, tab2, tab3 = st.tabs(["🔍 Sök & Analysera", "⭐ Min Sparlista", "🏆 Top listan"])
 
 # --- FLIK 1: Sök & Analysera ---
@@ -362,15 +386,33 @@ with tab1:
         with col_neg:
             st.error("**Risker:**\n" + "\n".join([f"- {r}" for r in data['risks']]))
 
-        # NYHETER OCH VARNINGSKLOCKOR
+        # --- NYHETER & VARNINGSKLOCKOR ---
         st.markdown("### 📰 Nyheter & Varningsklockor")
-        if data['news']:
-            for n in data['news']:
-                title = n.get('title', 'Nyhet')
-                link = n.get('link', '#')
-                publisher = n.get('publisher', 'Nyhetskälla')
-                st.markdown(f"- [{title}]({link}) *(Källa: {publisher})*")
-        else:
+        has_news = False
+        
+        if data['news']['positive']:
+            has_news = True
+            st.success("**🟢 Positiva Nyheter:**")
+            for n in data['news']['positive']:
+                t = n.get('title') or n.get('headline')
+                st.markdown(f"- [{t}]({n.get('link', '#')}) *(Källa: {n.get('publisher', 'Nyhetskälla')})*")
+                
+        if data['news']['negative']:
+            has_news = True
+            st.error("**🔴 Negativa Nyheter / Varningsklockor:**")
+            for n in data['news']['negative']:
+                t = n.get('title') or n.get('headline')
+                st.markdown(f"- [{t}]({n.get('link', '#')}) *(Källa: {n.get('publisher', 'Nyhetskälla')})*")
+                
+        # Om vi inte hittade tillräckligt med pos/neg nyheter, visa de neutrala senaste nyheterna
+        if not data['news']['positive'] and not data['news']['negative'] and data['news']['neutral']:
+            has_news = True
+            st.info("**⚪ Övriga aktuella nyheter:**")
+            for n in data['news']['neutral']:
+                t = n.get('title') or n.get('headline')
+                st.markdown(f"- [{t}]({n.get('link', '#')}) *(Källa: {n.get('publisher', 'Nyhetskälla')})*")
+
+        if not has_news:
             st.write("Hittade inga aktuella nyheter för tillfället.")
 
         st.markdown("### 📊 Uppdelning av data")
@@ -475,7 +517,7 @@ with tab2:
 # --- FLIK 3: Top Listan ---
 with tab3:
     st.title("🏆 Top listan (Vinnarna just nu)")
-    st.write("Skanna marknaden för att hitta aktierna med högst algoritmpoäng. Appen letar bland de mest omsatta bolagen på vald börs.")
+    st.write("Skanna marknaden för att hitta aktierna med högst algoritmpoäng.")
     
     exchange_choice = st.selectbox("Vilken marknad vill du scanna?", ["Stockholmsbörsen (Top 25)", "Nasdaq US (Top 25 Tech)"])
     
