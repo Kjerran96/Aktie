@@ -60,7 +60,7 @@ def search_ticker_by_name(query):
     except Exception:
         return []
 
-# --- Enkel Ord-skanner för Nyhetsvärdering (Sentiment) ---
+# --- Enkel Ord-skanner för Nyhetsvärdering ---
 def analyze_news_sentiment(title):
     title_lower = title.lower()
     pos_words = ['up', 'higher', 'jump', 'surge', 'buy', 'growth', 'profit', 'beat', 'bull', 'upgrade', 'high', 'dividend', 'upp', 'köp', 'vinst', 'höjer', 'stiger', 'lyfter', 'rekord', 'soar', 'strong']
@@ -73,7 +73,7 @@ def analyze_news_sentiment(title):
     elif neg_score > pos_score: return "negative"
     else: return "neutral"
 
-# --- Smarta etiketter (Bra, Medel, Dålig) ---
+# --- Smarta etiketter ---
 def get_label(value, metric_type):
     if value is None or pd.isna(value): return "(Saknas)"
     
@@ -81,26 +81,21 @@ def get_label(value, metric_type):
         if value < 15: return "(Bra 🟢)"
         elif value <= 25: return "(Medel 🟡)"
         else: return "(Dålig 🔴)"
-        
     elif metric_type == 'peg':
         if value < 1.0: return "(Bra 🟢)"
         elif value <= 1.5: return "(Medel 🟡)"
         else: return "(Dålig 🔴)"
-        
     elif metric_type == 'div':
         if value > 0.03: return "(Bra 🟢)" 
         elif value > 0: return "(Medel 🟡)"
         else: return "(Dålig 🔴)"
-        
     elif metric_type == 'rsi':
         if value < 30: return "(Bra/Översåld 🟢)"
         elif value <= 70: return "(Medel 🟡)"
         else: return "(Dålig/Överköpt 🔴)"
-        
     elif metric_type == 'trend':
         if value > 0: return "(Bra 🟢)"
         else: return "(Dålig 🔴)"
-        
     return ""
 
 # --- Smart insiktsgenerator ---
@@ -206,7 +201,6 @@ def get_historical_scores(ticker_symbol, current_pe, current_peg, dividend, reco
     exp1 = hist['Close'].ewm(span=12, adjust=False).mean()
     exp2 = hist['Close'].ewm(span=26, adjust=False).mean()
     hist['MACD_Diff'] = (exp1 - exp2) - (exp1 - exp2).ewm(span=9, adjust=False).mean()
-    
     hist['MA50'] = hist['Close'].rolling(window=50).mean()
     hist['MA200'] = hist['Close'].rolling(window=200).mean()
     
@@ -225,7 +219,6 @@ def get_historical_scores(ticker_symbol, current_pe, current_peg, dividend, reco
     }
     
     history_dict = {}
-    
     for date, row in monthly_data.iterrows():
         close_price = safe_val(row['Close'])
         if not close_price:
@@ -260,13 +253,22 @@ def fetch_stock_data(ticker_symbol):
     beta = info.get('beta', None)
     recommendation = info.get('recommendationKey', None)
     
-    # Hämta nyheter - vi tar de 5 senaste, oavsett om de är positiva eller neutrala
-    news = []
+    news = {'positive': [], 'negative': [], 'neutral': []}
     try:
-        raw_news = ticker.news[:5] 
+        raw_news = ticker.news[:15]
         for n in raw_news:
-            if n.get('title') or n.get('headline'):
-                news.append(n)
+            title = n.get('title') or n.get('headline')
+            if not title:
+                continue
+            
+            sentiment = analyze_news_sentiment(title)
+            
+            if sentiment == 'positive' and len(news['positive']) < 2:
+                news['positive'].append(n)
+            elif sentiment == 'negative' and len(news['negative']) < 2:
+                news['negative'].append(n)
+            elif sentiment == 'neutral' and len(news['neutral']) < 3:
+                news['neutral'].append(n)
     except Exception:
         pass
     
@@ -377,20 +379,32 @@ with tab1:
             st.error("**Risker:**\n" + "\n".join([f"- {r}" for r in data['risks']]))
 
         # --- NYHETER & VARNINGSKLOCKOR ---
-        st.markdown("### 📰 Senaste Nyheterna")
-        if data['news']:
-            for n in data['news']:
-                title = n.get('title') or n.get('headline')
-                link = n.get('link', '#')
-                publisher = n.get('publisher', 'Nyhetskälla')
+        st.markdown("### 📰 Nyheter & Varningsklockor")
+        has_news = False
+        
+        if data['news']['positive']:
+            has_news = True
+            st.success("**🟢 Positiva Nyheter:**")
+            for n in data['news']['positive']:
+                t = n.get('title') or n.get('headline')
+                st.markdown(f"- [{t}]({n.get('link', '#')}) *(Källa: {n.get('publisher', 'Nyhetskälla')})*")
                 
-                # Använd ord-skannern för att sätta en snabb färg-etikett
-                sentiment = analyze_news_sentiment(title)
-                icon = "🟢" if sentiment == "positive" else "🔴" if sentiment == "negative" else "⚪"
+        if data['news']['negative']:
+            has_news = True
+            st.error("**🔴 Negativa Nyheter / Varningsklockor:**")
+            for n in data['news']['negative']:
+                t = n.get('title') or n.get('headline')
+                st.markdown(f"- [{t}]({n.get('link', '#')}) *(Källa: {n.get('publisher', 'Nyhetskälla')})*")
                 
-                st.markdown(f"{icon} [{title}]({link}) *(Källa: {publisher})*")
-        else:
-            st.info("Yahoo Finance saknar tyvärr nyhetsflöde för just den här aktien (detta är väldigt vanligt för mindre svenska bolag).")
+        if data['news']['neutral']:
+            has_news = True
+            st.info("**⚪ Övriga aktuella nyheter:**")
+            for n in data['news']['neutral']:
+                t = n.get('title') or n.get('headline')
+                st.markdown(f"- [{t}]({n.get('link', '#')}) *(Källa: {n.get('publisher', 'Nyhetskälla')})*")
+
+        if not has_news:
+            st.write("Kunde tyvärr inte hämta något nyhetsflöde just nu (kan bero på tillfälliga API-avbrott eller saknad data hos leverantören).")
 
         st.markdown("### 📊 Uppdelning av data")
         col1, col2 = st.columns(2)
