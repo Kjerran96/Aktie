@@ -13,7 +13,13 @@ DB_FILE = "watchlist.json"
 def load_watchlist():
     if os.path.exists(DB_FILE):
         with open(DB_FILE, "r") as f:
-            return json.load(f)
+            try:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    return list(data.keys())
+                return data
+            except:
+                return []
     return []
 
 def save_watchlist(watchlist):
@@ -242,6 +248,12 @@ def fetch_stock_data(ticker_symbol):
     beta = info.get('beta', None)
     recommendation = info.get('recommendationKey', None)
     
+    # Hämta nyheter
+    try:
+        news = ticker.news[:3]
+    except Exception:
+        news = []
+    
     hist_5y_data = ticker.history(period="5y")
     if not hist_5y_data.empty and 'Close' in hist_5y_data.columns:
         hist_5y = hist_5y_data['Close']
@@ -274,7 +286,7 @@ def fetch_stock_data(ticker_symbol):
         'pe': pe, 'peg': peg, 'div': div, 'rsi': rsi, 'ma50': ma50, 'ma200': ma200,
         'positives': positives, 'risks': risks,
         'hist_5y': hist_5y, 'historical_scores': historical_scores,
-        'ticker': ticker_symbol
+        'ticker': ticker_symbol, 'news': news
     }
 
 # --- Streamlit Gränssnitt ---
@@ -292,7 +304,7 @@ if 'search_options' not in st.session_state:
 if 'toplist_results' not in st.session_state:
     st.session_state.toplist_results = []
 
-# Tredje fliken tillagd!
+# Tre flikar
 tab1, tab2, tab3 = st.tabs(["🔍 Sök & Analysera", "⭐ Min Sparlista", "🏆 Top listan"])
 
 # --- FLIK 1: Sök & Analysera ---
@@ -349,6 +361,17 @@ with tab1:
             st.success("**Möjligheter:**\n" + "\n".join([f"- {p}" for p in data['positives']]))
         with col_neg:
             st.error("**Risker:**\n" + "\n".join([f"- {r}" for r in data['risks']]))
+
+        # NYHETER OCH VARNINGSKLOCKOR
+        st.markdown("### 📰 Nyheter & Varningsklockor")
+        if data['news']:
+            for n in data['news']:
+                title = n.get('title', 'Nyhet')
+                link = n.get('link', '#')
+                publisher = n.get('publisher', 'Nyhetskälla')
+                st.markdown(f"- [{title}]({link}) *(Källa: {publisher})*")
+        else:
+            st.write("Hittade inga aktuella nyheter för tillfället.")
 
         st.markdown("### 📊 Uppdelning av data")
         col1, col2 = st.columns(2)
@@ -459,7 +482,6 @@ with tab3:
     if st.button("🔍 Scanna Marknaden (Tar ca 10 sekunder)", type="primary"):
         tickers_to_scan = STHLM_TICKERS if "Stockholm" in exchange_choice else NASDAQ_TICKERS
         
-        # En snygg laddningsmätare
         progress_text = "Skannar bolagen, ett ögonblick..."
         my_bar = st.progress(0, text=progress_text)
         
@@ -468,17 +490,14 @@ with tab3:
             data = fetch_stock_data(ticker)
             if data:
                 results.append(data)
-            # Uppdatera mätaren
             my_bar.progress((i + 1) / len(tickers_to_scan), text=f"Analyserar {ticker} ({i+1}/{len(tickers_to_scan)})...")
         
-        # Sortera resultat efter poäng (högst först)
         top_10 = sorted(results, key=lambda x: x['score'], reverse=True)[:10]
         st.session_state.toplist_results = top_10
         
-        my_bar.empty() # Ta bort laddningsmätaren när det är klart
+        my_bar.empty()
         st.success("Skanning klar! Här är top 10:")
 
-    # Visa resultaten om de finns i minnet
     if st.session_state.toplist_results:
         st.markdown(f"### 🔥 Topp 10: {exchange_choice}")
         
@@ -489,7 +508,6 @@ with tab3:
             score = data['score']
             name = data['info'].get('shortName', ticker)
             
-            # Färgkodning på poängen
             color = "green" if score >= 75 else "orange" if score >= 50 else "red"
             
             with st.container():
