@@ -81,7 +81,6 @@ def search_ticker_by_name(query):
 @st.cache_data(ttl=1800, show_spinner=False)
 def get_top_winners(market):
     tickers = STHLM_EXPANDED if market == "Sverige" else NASDAQ_EXPANDED
-    # Laddar ner enbart historiska priser för alla samtidigt (tar ca 1-2 sekunder)
     df = yf.download(tickers, period="3mo", progress=False)
     if 'Close' in df:
         df = df['Close']
@@ -97,7 +96,6 @@ def get_top_winners(market):
                     ret = ((last - first) / first) * 100
                     returns[ticker] = float(ret)
                     
-    # Sortera och plocka ut topp 30
     sorted_tickers = sorted(returns.items(), key=lambda x: x[1], reverse=True)[:30]
     return sorted_tickers
 
@@ -404,12 +402,15 @@ def show_full_analysis(data, ticker, context_key):
 # --- Streamlit Gränssnitt ---
 st.set_page_config(page_title="Aktierankaren Pro", page_icon="📈", layout="centered")
 
+# --- Hantera session state ---
 if 'current_ticker' not in st.session_state: st.session_state.current_ticker = None
 if 'stock_data' not in st.session_state: st.session_state.stock_data = None
 if 'watchlist_data' not in st.session_state: st.session_state.watchlist_data = {}
 if 'search_options' not in st.session_state: st.session_state.search_options = []
 if 'toplist_results' not in st.session_state: st.session_state.toplist_results = []
 if 'winners_list' not in st.session_state: st.session_state.winners_list = []
+if 'winner_to_analyze' not in st.session_state: st.session_state.winner_to_analyze = None
+if 'win_stock_data' not in st.session_state: st.session_state.win_stock_data = None
 
 tab1, tab2, tab3, tab4 = st.tabs(["🔍 Sök & Analysera", "⭐ Min Sparlista", "🏆 Top listan", "🚀 Vinnarna"])
 
@@ -547,35 +548,51 @@ with tab3:
                     show_full_analysis(data, ticker, f"top_list_{ticker}")
                 st.markdown("---")
 
-# --- FLIK 4: Vinnarna (NY FLIK) ---
+# --- FLIK 4: Vinnarna ---
 with tab4:
     st.title("🚀 Vinnarna (Momentum)")
-    st.write("Gör en blixtsnabb pris-skanning av 50 stora bolag för att hitta vilka som gått bäst de senaste 3 månaderna. Tryck sedan på Analysera för att dyka djupare!")
+    st.write("Skanna snabbt 50 stora bolag för att se vilka som ökat mest i värde de senaste 3 månaderna.")
     
-    winner_market = st.selectbox("Vilken marknad vill du scanna efter vinnare?", ["Sverige", "Nasdaq"], key="winner_select")
-    
-    if st.button("Hämta Vinnare (3 månader)"):
-        with st.spinner("Skannar prisutvecklingen (tar ca 2-3 sekunder)..."):
-            st.session_state.winners_list = get_top_winners(winner_market)
-            
-    if st.session_state.winners_list:
-        st.markdown("### 🔥 Topp 30 (Högst avkastning 3 mån)")
+    # Har vi klickat på att analysera en vinnare? Visa analysen istället för listan!
+    if st.session_state.winner_to_analyze and st.session_state.win_stock_data:
+        if st.button("⬅️ Tillbaka till Vinnarlistan", type="primary"):
+            st.session_state.winner_to_analyze = None
+            st.session_state.win_stock_data = None
+            st.rerun()
+
+        data = st.session_state.win_stock_data
+        ticker = st.session_state.winner_to_analyze
         
-        for idx, (ticker, pct) in enumerate(st.session_state.winners_list, 1):
-            with st.expander(f"#{idx} | {ticker} (Upp {round(pct, 1)}%)"):
+        st.markdown("---")
+        st.header(data['info'].get('shortName', ticker))
+        show_full_analysis(data, ticker, f"winner_view_{ticker}")
+        
+    else:
+        # Visar listan och Sök-knappen
+        winner_market = st.selectbox("Vilken marknad vill du scanna efter vinnare?", ["Sverige", "Nasdaq"], key="winner_select")
+        
+        if st.button("Hämta Vinnare (3 månader)"):
+            with st.spinner("Skannar prisutvecklingen (tar ca 2-3 sekunder)..."):
+                st.session_state.winners_list = get_top_winners(winner_market)
                 
-                # Om vi redan har tryckt på knappen och hämtat datan, sparar vi den i minnet
-                if f"win_data_{ticker}" not in st.session_state:
-                    if st.button("📊 Analysera denna aktie", key=f"btn_analyze_{ticker}"):
-                        with st.spinner("Hämtar in nyheter, RSI och poäng..."):
+        if st.session_state.winners_list:
+            st.markdown("### 🔥 Topp 30 (Högst avkastning 3 mån)")
+            st.markdown("---")
+            
+            for rank, (ticker, pct) in enumerate(st.session_state.winners_list, 1):
+                col1, col2, col3 = st.columns([1, 4, 3])
+                with col1:
+                    st.markdown(f"### #{rank}")
+                with col2:
+                    st.markdown(f"**{ticker}**<br>🟢 Upp {round(pct, 1)}%", unsafe_allow_html=True)
+                with col3:
+                    if st.button("📊 Analysera", key=f"btn_analyze_{ticker}", use_container_width=True):
+                        with st.spinner("Hämtar data..."):
                             fetched_data = fetch_stock_data(ticker)
                             if fetched_data:
-                                st.session_state[f"win_data_{ticker}"] = fetched_data
+                                st.session_state.winner_to_analyze = ticker
+                                st.session_state.win_stock_data = fetched_data
                                 st.rerun()
                             else:
                                 st.error("Kunde inte hämta data för denna.")
-                
-                # Visa datan om den ligger i minnet
-                if f"win_data_{ticker}" in st.session_state:
-                    data = st.session_state[f"win_data_{ticker}"]
-                    show_full_analysis(data, ticker, f"winner_ctx_{ticker}")
+                st.markdown("---")
