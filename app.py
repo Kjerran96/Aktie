@@ -43,12 +43,13 @@ NASDAQ_TICKERS = [
     "AMAT", "MU", "CRWD", "PANW"
 ]
 
+# Rensad och uppdaterad lista! Inga avlistade "spök-aktier"
 STHLM_EXPANDED = STHLM_TICKERS + [
-    "SWMA.ST", "CAST.ST", "BALD-B.ST", "SBB-B.ST", "FABG.ST", 
-    "WALL-B.ST", "NYF.ST", "DIOS.ST", "CORE-A.ST", "NP3.ST", 
-    "CATE.ST", "SSAB-B.ST", "RESURS.ST", "FORTNOX.ST", "HMS.ST", 
-    "VITR.ST", "MIPS.ST", "SECT-B.ST", "INSTAL.ST", "THULE.ST", 
-    "LIFCO-B.ST", "AAK.ST", "AXFO.ST", "DOM.ST", "HUFV-A.ST"
+    "CAST.ST", "BALD-B.ST", "SBB-B.ST", "FABG.ST", "WALL-B.ST", 
+    "NYF.ST", "DIOS.ST", "CORE-A.ST", "NP3.ST", "CATE.ST", 
+    "SSAB-B.ST", "RESURS.ST", "FORTNOX.ST", "HMS.ST", "VITR.ST", 
+    "MIPS.ST", "SECT-B.ST", "INSTAL.ST", "THULE.ST", "LIFCO-B.ST", 
+    "AAK.ST", "AXFO.ST", "DOMETIC.ST", "HUFV-A.ST", "NENT.ST"
 ]
 
 NASDAQ_EXPANDED = NASDAQ_TICKERS + [
@@ -76,7 +77,7 @@ def search_ticker_by_name(query):
     except:
         return []
 
-# --- Blixtsnabb Pris-skanner ---
+# --- Blixtsnabb Pris-skanner för Vinnar-fliken ---
 @st.cache_data(ttl=1800, show_spinner=False)
 def get_top_winners(market):
     tickers = STHLM_EXPANDED if market == "Sverige" else NASDAQ_EXPANDED
@@ -303,7 +304,9 @@ def fetch_stock_data(ticker_symbol):
         lower_band = safe_val((ma20 - 2 * std20).iloc[-1])
         upper_band = safe_val((ma20 + 2 * std20).iloc[-1])
         
-        if current_price is None: current_price = safe_val(hist_1y['Close'].iloc[-1])
+    # Krockkudde ifall Yahoos API saknar current_price
+    if current_price is None and not hist_1y.empty and 'Close' in hist_1y.columns and len(hist_1y['Close']) > 0:
+        current_price = safe_val(hist_1y['Close'].iloc[-1])
 
     score, breakdown = calculate_score_100(pe, peg, div, recommendation, rsi, macd_diff, ma50, ma200)
     positives, risks = generate_insights(pe, peg, div, rsi, ma50, ma200, beta)
@@ -397,6 +400,14 @@ def show_full_analysis(data, ticker, context_key):
         df_5y = data['hist_5y'].reset_index()
         df_5y.columns = ['Datum', 'Pris']
         st.altair_chart(alt.Chart(df_5y).mark_line(color='#3498db').encode(x=alt.X('Datum', title=''), y=alt.Y('Pris', scale=alt.Scale(zero=False))), use_container_width=True)
+
+
+# --- Callback Funktioner ---
+def set_analyze_winner(ticker):
+    st.session_state.winner_to_analyze = ticker
+
+def clear_analyze_winner():
+    st.session_state.winner_to_analyze = None
 
 # --- Streamlit Gränssnitt ---
 st.set_page_config(page_title="Aktierankaren Pro", page_icon="📈", layout="centered")
@@ -561,40 +572,32 @@ with tab3:
 with tab4:
     st.title("🚀 Vinnarna (Momentum)")
     
-    # 1. Om en aktie ÄR vald för analys, visa bara analysen!
-    if st.session_state.get('winner_to_analyze'):
+    if st.session_state.winner_to_analyze:
         ticker = st.session_state.winner_to_analyze
-        
-        # Knapp för att gå tillbaka
-        if st.button("⬅️ Tillbaka till Vinnarlistan", type="primary"):
-            st.session_state.winner_to_analyze = None
-            st.rerun()
-            
+        st.button("⬅️ Tillbaka till Vinnarlistan", on_click=clear_analyze_winner, type="primary")
         st.markdown("---")
         
-        # Hämta datan och rendera analysen
         with st.spinner(f"Hämtar djupanalys för {ticker}..."):
-            data = fetch_stock_data(ticker)
-            
-        if data:
-            st.header(data['info'].get('shortName', ticker))
-            
-            # Spara-knapp för vinnar-analysen
-            watchlist = load_watchlist()
-            if ticker not in watchlist:
-                if st.button("⭐ Spara till Watchlist", key="save_btn_winner"):
-                    watchlist.append(ticker)
-                    save_watchlist(watchlist)
-                    st.success(f"{ticker} sparades i din lista!")
-                    st.rerun()
-            else:
-                st.info("⭐ Sparad i din Watchlist")
-                
-            show_full_analysis(data, ticker, f"winner_view_{ticker}")
-        else:
-            st.error("Kunde tyvärr inte hämta djupdata för denna aktie just nu.")
-            
-    # 2. Om INGEN aktie är vald, visa listan och skannern!
+            try:
+                data = fetch_stock_data(ticker)
+                if data:
+                    st.header(data['info'].get('shortName', ticker))
+                    watchlist = load_watchlist()
+                    if ticker not in watchlist:
+                        if st.button("⭐ Spara till Watchlist", key="save_btn_winner"):
+                            watchlist.append(ticker)
+                            save_watchlist(watchlist)
+                            st.success(f"{ticker} sparades i din lista!")
+                            st.rerun()
+                    else:
+                        st.info("⭐ Sparad i din Watchlist")
+                        
+                    show_full_analysis(data, ticker, f"winner_view_{ticker}")
+                else:
+                    st.error("Kunde tyvärr inte hämta djupdata för denna aktie just nu.")
+            except Exception as e:
+                st.error("Ett tekniskt fel uppstod vid hämtningen från Yahoo Finance. Försök med en annan aktie!")
+    
     else:
         st.write("Skanna snabbt 50 stora bolag för att se vilka som ökat mest i värde de senaste 3 månaderna.")
         winner_market = st.selectbox("Vilken marknad vill du scanna efter vinnare?", ["Sverige", "Nasdaq"], key="winner_select")
@@ -603,19 +606,14 @@ with tab4:
             with st.spinner("Skannar prisutvecklingen (tar ca 2-3 sekunder)..."):
                 st.session_state.winners_list = get_top_winners(winner_market)
                 
-        if st.session_state.get('winners_list'):
+        if st.session_state.winners_list:
             st.markdown("### 🔥 Topp 30 (Högst avkastning 3 mån)")
             st.markdown("---")
             
             for rank, (ticker, pct) in enumerate(st.session_state.winners_list, 1):
                 col1, col2, col3 = st.columns([1, 4, 3])
-                with col1:
-                    st.markdown(f"### #{rank}")
-                with col2:
-                    st.markdown(f"**{ticker}**<br>🟢 Upp {round(pct, 1)}%", unsafe_allow_html=True)
+                with col1: st.markdown(f"### #{rank}")
+                with col2: st.markdown(f"**{ticker}**<br>🟢 Upp {round(pct, 1)}%", unsafe_allow_html=True)
                 with col3:
-                    # Direktanrop: Sätt vald aktie och ladda om skärmen omedelbart
-                    if st.button("📊 Analysera", key=f"btn_analyze_{ticker}", use_container_width=True):
-                        st.session_state.winner_to_analyze = ticker
-                        st.rerun()
+                    st.button("📊 Analysera", key=f"btn_analyze_{ticker}", on_click=set_analyze_winner, args=(ticker,), use_container_width=True)
                 st.markdown("---")
