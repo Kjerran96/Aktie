@@ -411,6 +411,11 @@ if 'toplist_results' not in st.session_state: st.session_state.toplist_results =
 if 'winners_list' not in st.session_state: st.session_state.winners_list = []
 if 'winner_to_analyze' not in st.session_state: st.session_state.winner_to_analyze = None
 if 'win_stock_data' not in st.session_state: st.session_state.win_stock_data = None
+if 'winner_to_analyze_pending' not in st.session_state: st.session_state.winner_to_analyze_pending = None
+
+# --- CALLBACK FÖR ATT SÄTTA VÄNTANDE ANALYS ---
+def set_pending_winner(ticker_to_set):
+    st.session_state.winner_to_analyze_pending = ticker_to_set
 
 tab1, tab2, tab3, tab4 = st.tabs(["🔍 Sök & Analysera", "⭐ Min Sparlista", "🏆 Top listan", "🚀 Vinnarna"])
 
@@ -443,6 +448,17 @@ with tab1:
         ticker = st.session_state.current_ticker
         st.markdown("---")
         st.header(data['info'].get('shortName', ticker))
+        
+        watchlist = load_watchlist()
+        if ticker not in watchlist:
+            if st.button("⭐ Spara till Watchlist", key="save_btn_search"):
+                watchlist.append(ticker)
+                save_watchlist(watchlist)
+                st.success(f"{ticker} sparades i din lista!")
+                st.rerun()
+        else:
+            st.info("⭐ Sparad i din Watchlist")
+            
         show_full_analysis(data, ticker, "search")
 
 # --- FLIK 2: Min Sparlista ---
@@ -553,7 +569,19 @@ with tab4:
     st.title("🚀 Vinnarna (Momentum)")
     st.write("Skanna snabbt 50 stora bolag för att se vilka som ökat mest i värde de senaste 3 månaderna.")
     
-    # Har vi klickat på att analysera en vinnare? Visa analysen istället för listan!
+    # --- 1. KOLLA OM EN KNAPP HAR TRYCKTS (CALLBACK) ---
+    if st.session_state.get('winner_to_analyze_pending'):
+        ticker = st.session_state.winner_to_analyze_pending
+        with st.spinner(f"Hämtar djupanalys för {ticker}..."):
+            data = fetch_stock_data(ticker)
+            if data:
+                st.session_state.winner_to_analyze = ticker
+                st.session_state.win_stock_data = data
+            else:
+                st.error(f"Kunde tyvärr inte hämta djupdata för {ticker} just nu.")
+        st.session_state.winner_to_analyze_pending = None # Återställ minnet när datan är hämtad
+    
+    # --- 2. VISA ANALYSEN ELLER LISTAN ---
     if st.session_state.winner_to_analyze and st.session_state.win_stock_data:
         if st.button("⬅️ Tillbaka till Vinnarlistan", type="primary"):
             st.session_state.winner_to_analyze = None
@@ -565,10 +593,22 @@ with tab4:
         
         st.markdown("---")
         st.header(data['info'].get('shortName', ticker))
+        
+        # Spara-knapp för vinnar-analysen
+        watchlist = load_watchlist()
+        if ticker not in watchlist:
+            if st.button("⭐ Spara till Watchlist", key="save_btn_winner"):
+                watchlist.append(ticker)
+                save_watchlist(watchlist)
+                st.success(f"{ticker} sparades i din lista!")
+                st.rerun()
+        else:
+            st.info("⭐ Sparad i din Watchlist")
+            
         show_full_analysis(data, ticker, f"winner_view_{ticker}")
         
     else:
-        # Visar listan och Sök-knappen
+        # Visar listan och Sök-knappen om ingen analys är vald
         winner_market = st.selectbox("Vilken marknad vill du scanna efter vinnare?", ["Sverige", "Nasdaq"], key="winner_select")
         
         if st.button("Hämta Vinnare (3 månader)"):
@@ -586,13 +626,6 @@ with tab4:
                 with col2:
                     st.markdown(f"**{ticker}**<br>🟢 Upp {round(pct, 1)}%", unsafe_allow_html=True)
                 with col3:
-                    if st.button("📊 Analysera", key=f"btn_analyze_{ticker}", use_container_width=True):
-                        with st.spinner("Hämtar data..."):
-                            fetched_data = fetch_stock_data(ticker)
-                            if fetched_data:
-                                st.session_state.winner_to_analyze = ticker
-                                st.session_state.win_stock_data = fetched_data
-                                st.rerun()
-                            else:
-                                st.error("Kunde inte hämta data för denna.")
+                    # Använder callback: on_click skickar ticker till set_pending_winner INNAN sidan laddas om
+                    st.button("📊 Analysera", key=f"btn_analyze_{ticker}", on_click=set_pending_winner, args=(ticker,), use_container_width=True)
                 st.markdown("---")
