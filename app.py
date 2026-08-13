@@ -42,7 +42,7 @@ NASDAQ_TICKERS = [
     "AMAT", "MU", "CRWD", "PANW"
 ]
 
-# --- Sökmotor för företagsnamn ---
+# --- Sökmotor ---
 def search_ticker_by_name(query):
     url = f"https://query2.finance.yahoo.com/v1/finance/search?q={query}&quotesCount=10"
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
@@ -219,6 +219,7 @@ def get_historical_scores(ticker_symbol, current_pe, current_peg, dividend, reco
     }
     
     history_dict = {}
+    
     for date, row in monthly_data.iterrows():
         close_price = safe_val(row['Close'])
         if not close_price:
@@ -252,6 +253,7 @@ def fetch_stock_data(ticker_symbol):
     div = info.get('dividendYield', None)
     beta = info.get('beta', None)
     recommendation = info.get('recommendationKey', None)
+    target_price = info.get('targetMeanPrice', None)
     
     news = {'positive': [], 'negative': [], 'neutral': []}
     try:
@@ -262,7 +264,6 @@ def fetch_stock_data(ticker_symbol):
                 continue
             
             sentiment = analyze_news_sentiment(title)
-            
             if sentiment == 'positive' and len(news['positive']) < 2:
                 news['positive'].append(n)
             elif sentiment == 'negative' and len(news['negative']) < 2:
@@ -279,7 +280,8 @@ def fetch_stock_data(ticker_symbol):
         hist_5y = pd.Series()
     
     hist_1y = ticker.history(period="1y") 
-    rsi = macd_diff = ma50 = ma200 = None
+    rsi = macd_diff = ma50 = ma200 = lower_band = upper_band = None
+    
     if not hist_1y.empty and len(hist_1y) >= 200:
         delta = hist_1y['Close'].diff()
         gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
@@ -293,6 +295,12 @@ def fetch_stock_data(ticker_symbol):
         macd_diff = safe_val((macd - macd.ewm(span=9, adjust=False).mean()).iloc[-1])
         ma50 = safe_val(hist_1y['Close'].rolling(window=50).mean().iloc[-1])
         ma200 = safe_val(hist_1y['Close'].rolling(window=200).mean().iloc[-1])
+        
+        # Bollinger Bands för Trading-nivåer (20 dagar)
+        ma20 = hist_1y['Close'].rolling(window=20).mean()
+        std20 = hist_1y['Close'].rolling(window=20).std()
+        lower_band = safe_val((ma20 - 2 * std20).iloc[-1])
+        upper_band = safe_val((ma20 + 2 * std20).iloc[-1])
 
     score, breakdown = calculate_score_100(pe, peg, div, recommendation, rsi, macd_diff, ma50, ma200)
     positives, risks = generate_insights(pe, peg, div, rsi, ma50, ma200, beta)
@@ -303,6 +311,7 @@ def fetch_stock_data(ticker_symbol):
         'info': info, 'score': score, 'breakdown': breakdown, 
         'pe': pe, 'peg': peg, 'div': div, 'rsi': rsi, 'ma50': ma50, 'ma200': ma200,
         'positives': positives, 'risks': risks,
+        'lower_band': lower_band, 'upper_band': upper_band, 'target_price': target_price,
         'hist_5y': hist_5y, 'historical_scores': historical_scores,
         'ticker': ticker_symbol, 'news': news
     }
@@ -378,6 +387,25 @@ with tab1:
         with col_neg:
             st.error("**Risker:**\n" + "\n".join([f"- {r}" for r in data['risks']]))
 
+        # --- NYTT: TRADING-NIVÅER ---
+        st.markdown("### 🎯 Prisnivåer (När ska man köpa/sälja?)")
+        col_buy, col_sell = st.columns(2)
+        
+        buy_price = data['lower_band']
+        sell_price = data['target_price'] if data['target_price'] else data['upper_band']
+        
+        with col_buy:
+            if buy_price:
+                st.success(f"**🟢 Köpläge (Tekniskt Stöd):**\n\nRunt **{round(buy_price, 2)}**\n\n*Priset där aktien historiskt brukar studsa uppåt.*")
+            else:
+                st.success("**🟢 Köpläge:** Data saknas")
+                
+        with col_sell:
+            if sell_price:
+                st.error(f"**🔴 Säljläge/Mål (Motstånd):**\n\nRunt **{round(sell_price, 2)}**\n\n*Analytikernas målpris eller det tekniska 'taket'.*")
+            else:
+                st.error("**🔴 Säljläge:** Data saknas")
+
         # --- NYHETER & VARNINGSKLOCKOR ---
         st.markdown("### 📰 Nyheter & Varningsklockor")
         has_news = False
@@ -404,7 +432,7 @@ with tab1:
                 st.markdown(f"- [{t}]({n.get('link', '#')}) *(Källa: {n.get('publisher', 'Nyhetskälla')})*")
 
         if not has_news:
-            st.write("Kunde tyvärr inte hämta något nyhetsflöde just nu (kan bero på tillfälliga API-avbrott eller saknad data hos leverantören).")
+            st.write("Hittade inga aktuella nyheter för tillfället.")
 
         st.markdown("### 📊 Uppdelning av data")
         col1, col2 = st.columns(2)
@@ -495,12 +523,17 @@ with tab2:
                     st.rerun()
             
             if data:
-                with st.expander("Visa insikter"):
+                with st.expander("Visa insikter & Prisnivåer"):
                     col_pos, col_neg = st.columns(2)
                     with col_pos:
                         st.success("\n".join([f"- {p}" for p in data['positives']]))
+                        if data['lower_band']:
+                            st.write(f"**Köp-stöd:** ~{round(data['lower_band'], 2)}")
                     with col_neg:
                         st.error("\n".join([f"- {r}" for r in data['risks']]))
+                        sell_p = data['target_price'] if data['target_price'] else data['upper_band']
+                        if sell_p:
+                            st.write(f"**Mål/Sälj:** ~{round(sell_p, 2)}")
                         
                     st.write(f"**Snabbfakta:** P/E: {round(data['pe'], 2) if data['pe'] else '-'} | PEG: {round(data['peg'], 2) if data['peg'] else '-'} | Utdelning: {round(data['div'] * 100, 2) if data['div'] else 0}% | RSI: {round(data['rsi'], 0) if data['rsi'] else '-'}")
             st.markdown("---")
