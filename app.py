@@ -253,7 +253,12 @@ def fetch_stock_data(ticker_symbol):
     div = info.get('dividendYield', None)
     beta = info.get('beta', None)
     recommendation = info.get('recommendationKey', None)
+    
+    # 1-års Prognos (Riktkurs)
     target_price = info.get('targetMeanPrice', None)
+    
+    current_price = info.get('currentPrice') or info.get('regularMarketPrice') or info.get('previousClose')
+    currency = info.get('currency', 'SEK')
     
     news = {'positive': [], 'negative': [], 'neutral': []}
     try:
@@ -296,15 +301,16 @@ def fetch_stock_data(ticker_symbol):
         ma50 = safe_val(hist_1y['Close'].rolling(window=50).mean().iloc[-1])
         ma200 = safe_val(hist_1y['Close'].rolling(window=200).mean().iloc[-1])
         
-        # Bollinger Bands för Trading-nivåer (20 dagar)
         ma20 = hist_1y['Close'].rolling(window=20).mean()
         std20 = hist_1y['Close'].rolling(window=20).std()
         lower_band = safe_val((ma20 - 2 * std20).iloc[-1])
         upper_band = safe_val((ma20 + 2 * std20).iloc[-1])
+        
+        if current_price is None:
+            current_price = safe_val(hist_1y['Close'].iloc[-1])
 
     score, breakdown = calculate_score_100(pe, peg, div, recommendation, rsi, macd_diff, ma50, ma200)
     positives, risks = generate_insights(pe, peg, div, rsi, ma50, ma200, beta)
-    
     historical_scores = get_historical_scores(ticker_symbol, pe, peg, div, recommendation)
     
     return {
@@ -312,6 +318,7 @@ def fetch_stock_data(ticker_symbol):
         'pe': pe, 'peg': peg, 'div': div, 'rsi': rsi, 'ma50': ma50, 'ma200': ma200,
         'positives': positives, 'risks': risks,
         'lower_band': lower_band, 'upper_band': upper_band, 'target_price': target_price,
+        'current_price': current_price, 'currency': currency,
         'hist_5y': hist_5y, 'historical_scores': historical_scores,
         'ticker': ticker_symbol, 'news': news
     }
@@ -366,6 +373,24 @@ with tab1:
         st.markdown("---")
         st.header(data['info'].get('shortName', ticker))
         
+        # --- NYTT: AKTUELLT PRIS & PROGNOS ---
+        if data.get('current_price'):
+            curr_price = data['current_price']
+            curr_sym = data.get('currency', '')
+            
+            st.subheader(f"Dagens pris: {round(curr_price, 2)} {curr_sym}")
+            
+            # Beräkna och visa 1-års prognos om datan finns
+            if data.get('target_price'):
+                target = data['target_price']
+                upside = ((target - curr_price) / curr_price) * 100
+                up_color = "green" if upside > 0 else "red"
+                sign = "+" if upside > 0 else ""
+                
+                st.markdown(f"**Prognos om 1 år (Analytiker):** {round(target, 2)} {curr_sym} (<span style='color:{up_color}'>{sign}{round(upside, 1)}%</span>)", unsafe_allow_html=True)
+            else:
+                st.markdown("**Prognos om 1 år:** Saknas hos Yahoo Finance")
+        
         watchlist = load_watchlist()
         if ticker not in watchlist:
             if st.button("⭐ Spara till Watchlist", key="save_btn_search"):
@@ -387,26 +412,24 @@ with tab1:
         with col_neg:
             st.error("**Risker:**\n" + "\n".join([f"- {r}" for r in data['risks']]))
 
-        # --- NYTT: TRADING-NIVÅER ---
-        st.markdown("### 🎯 Prisnivåer (När ska man köpa/sälja?)")
+        st.markdown("### 🎯 Tekniska Prisnivåer (Köp/Sälj)")
         col_buy, col_sell = st.columns(2)
         
         buy_price = data['lower_band']
-        sell_price = data['target_price'] if data['target_price'] else data['upper_band']
+        sell_price = data['upper_band']
         
         with col_buy:
             if buy_price:
-                st.success(f"**🟢 Köpläge (Tekniskt Stöd):**\n\nRunt **{round(buy_price, 2)}**\n\n*Priset där aktien historiskt brukar studsa uppåt.*")
+                st.success(f"**🟢 Köp-stöd (Teknisk botten):**\n\nRunt **{round(buy_price, 2)} {data.get('currency', '')}**\n\n*Priset där aktien historiskt brukar studsa uppåt.*")
             else:
-                st.success("**🟢 Köpläge:** Data saknas")
+                st.success("**🟢 Köp-stöd:** Data saknas")
                 
         with col_sell:
             if sell_price:
-                st.error(f"**🔴 Säljläge/Mål (Motstånd):**\n\nRunt **{round(sell_price, 2)}**\n\n*Analytikernas målpris eller det tekniska 'taket'.*")
+                st.error(f"**🔴 Sälj-motstånd (Tekniskt tak):**\n\nRunt **{round(sell_price, 2)} {data.get('currency', '')}**\n\n*Det tekniska 'taket' där aktien historiskt brukar vända ner.*")
             else:
-                st.error("**🔴 Säljläge:** Data saknas")
+                st.error("**🔴 Sälj-motstånd:** Data saknas")
 
-        # --- NYHETER & VARNINGSKLOCKOR ---
         st.markdown("### 📰 Nyheter & Varningsklockor")
         has_news = False
         
@@ -502,7 +525,8 @@ with tab2:
             
             with col_name:
                 if data:
-                    st.markdown(f"**{ticker}** - {data['info'].get('shortName', '')}")
+                    price_str = f" | {round(data['current_price'], 2)} {data.get('currency', '')}" if data.get('current_price') else ""
+                    st.markdown(f"**{ticker}** - {data['info'].get('shortName', '')}{price_str}")
                 else:
                     st.markdown(f"**{ticker}**")
                     
@@ -523,17 +547,22 @@ with tab2:
                     st.rerun()
             
             if data:
-                with st.expander("Visa insikter & Prisnivåer"):
+                with st.expander("Visa insikter, Prognos & Prisnivåer"):
+                    # Visa 1-års prognos här också!
+                    if data.get('target_price') and data.get('current_price'):
+                        upside = ((data['target_price'] - data['current_price']) / data['current_price']) * 100
+                        sign = "+" if upside > 0 else ""
+                        st.markdown(f"**Prognos om 1 år:** {round(data['target_price'], 2)} {data.get('currency', '')} ({sign}{round(upside, 1)}%)")
+                    
                     col_pos, col_neg = st.columns(2)
                     with col_pos:
                         st.success("\n".join([f"- {p}" for p in data['positives']]))
                         if data['lower_band']:
-                            st.write(f"**Köp-stöd:** ~{round(data['lower_band'], 2)}")
+                            st.write(f"**Köp-stöd:** ~{round(data['lower_band'], 2)} {data.get('currency', '')}")
                     with col_neg:
                         st.error("\n".join([f"- {r}" for r in data['risks']]))
-                        sell_p = data['target_price'] if data['target_price'] else data['upper_band']
-                        if sell_p:
-                            st.write(f"**Mål/Sälj:** ~{round(sell_p, 2)}")
+                        if data['upper_band']:
+                            st.write(f"**Sälj-motstånd:** ~{round(data['upper_band'], 2)} {data.get('currency', '')}")
                         
                     st.write(f"**Snabbfakta:** P/E: {round(data['pe'], 2) if data['pe'] else '-'} | PEG: {round(data['peg'], 2) if data['peg'] else '-'} | Utdelning: {round(data['div'] * 100, 2) if data['div'] else 0}% | RSI: {round(data['rsi'], 0) if data['rsi'] else '-'}")
             st.markdown("---")
@@ -543,7 +572,7 @@ with tab3:
     st.title("🏆 Top listan (Vinnarna just nu)")
     st.write("Skanna marknaden för att hitta aktierna med högst algoritmpoäng. Appen letar bland de mest omsatta bolagen på vald börs.")
     
-    exchange_choice = st.selectbox("Vilken marknad vill du scanna?", ["Stockholmsbörsen (Top 25)", "Nasdaq US (Top 25 Tech)"])
+    exchange_choice = st.selectbox("Vilken marknad vill scanna?", ["Stockholmsbörsen (Top 25)", "Nasdaq US (Top 25 Tech)"])
     
     if st.button("🔍 Scanna Marknaden (Tar ca 10 sekunder)", type="primary"):
         tickers_to_scan = STHLM_TICKERS if "Stockholm" in exchange_choice else NASDAQ_TICKERS
@@ -577,7 +606,8 @@ with tab3:
             color = "green" if score >= 75 else "orange" if score >= 50 else "red"
             
             with st.container():
-                st.markdown(f"#### #{rank} | {name} ({ticker})")
+                price_str = f" | {round(data['current_price'], 2)} {data.get('currency', '')}" if data.get('current_price') else ""
+                st.markdown(f"#### #{rank} | {name} ({ticker}){price_str}")
                 
                 col1, col2, col3 = st.columns([2, 4, 2])
                 
