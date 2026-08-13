@@ -6,7 +6,8 @@ import requests
 import json
 import os
 import altair as alt
-import time  # NY IMPORT FÖR ATT BROMSA SKANNERN
+import time
+from datetime import datetime
 
 # --- Databas för Sparlistan ---
 DB_FILE = "watchlist.json"
@@ -16,8 +17,7 @@ def load_watchlist():
         with open(DB_FILE, "r") as f:
             try:
                 data = json.load(f)
-                if isinstance(data, dict):
-                    return list(data.keys())
+                if isinstance(data, dict): return list(data.keys())
                 return data
             except:
                 return []
@@ -27,7 +27,7 @@ def save_watchlist(watchlist):
     with open(DB_FILE, "w") as f:
         json.dump(watchlist, f)
 
-# --- Ticker-listor för Top-listan ---
+# --- Listor för Skanning ---
 STHLM_TICKERS = [
     "VOLV-B.ST", "INVE-B.ST", "ATCO-A.ST", "HM-B.ST", "SEB-A.ST", 
     "SHB-A.ST", "SWED-A.ST", "ERIC-B.ST", "ASSA-B.ST", "EVO.ST", 
@@ -43,7 +43,23 @@ NASDAQ_TICKERS = [
     "AMAT", "MU", "CRWD", "PANW"
 ]
 
+# Större listor för Vinnar-fliken (50 bolag vardera)
+STHLM_EXPANDED = STHLM_TICKERS + [
+    "SWMA.ST", "CAST.ST", "BALD-B.ST", "SBB-B.ST", "FABG.ST", 
+    "WALL-B.ST", "NYF.ST", "DIOS.ST", "CORE-A.ST", "NP3.ST", 
+    "CATE.ST", "SSAB-B.ST", "RESURS.ST", "FORTNOX.ST", "HMS.ST", 
+    "VITR.ST", "MIPS.ST", "SECT-B.ST", "INSTAL.ST", "THULE.ST", 
+    "LIFCO-B.ST", "AAK.ST", "AXFO.ST", "DOM.ST", "HUFV-A.ST"
+]
+
+NASDAQ_EXPANDED = NASDAQ_TICKERS + [
+    "SNOW", "PLTR", "DDOG", "ZM", "SQ", "UBER", "ROKU", "DOCU", 
+    "TWLO", "PINS", "SHOP", "SPOT", "COIN", "DKNG", "HOOD", 
+    "RBLX", "U", "AFRM", "PATH", "MDB", "NET", "OKTA", "TEAM", "WDAY", "MRVL"
+]
+
 # --- Sökmotor ---
+@st.cache_data(ttl=3600, show_spinner=False)
 def search_ticker_by_name(query):
     url = f"https://query2.finance.yahoo.com/v1/finance/search?q={query}&quotesCount=10"
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
@@ -58,10 +74,34 @@ def search_ticker_by_name(query):
             if symbol:
                 results.append(f"{symbol} - {name} ({exch})")
         return results
-    except Exception:
+    except:
         return []
 
-# --- Enkel Ord-skanner för Nyhetsvärdering ---
+# --- Blixtsnabb Pris-skanner för Vinnar-fliken ---
+@st.cache_data(ttl=1800, show_spinner=False)
+def get_top_winners(market):
+    tickers = STHLM_EXPANDED if market == "Sverige" else NASDAQ_EXPANDED
+    # Laddar ner enbart historiska priser för alla samtidigt (tar ca 1-2 sekunder)
+    df = yf.download(tickers, period="3mo", progress=False)
+    if 'Close' in df:
+        df = df['Close']
+    
+    returns = {}
+    for ticker in tickers:
+        if ticker in df.columns:
+            col_data = df[ticker].dropna()
+            if len(col_data) > 0:
+                first = col_data.iloc[0]
+                last = col_data.iloc[-1]
+                if first > 0:
+                    ret = ((last - first) / first) * 100
+                    returns[ticker] = float(ret)
+                    
+    # Sortera och plocka ut topp 30
+    sorted_tickers = sorted(returns.items(), key=lambda x: x[1], reverse=True)[:30]
+    return sorted_tickers
+
+# --- Analysverktyg ---
 def analyze_news_sentiment(title):
     title_lower = title.lower()
     pos_words = ['up', 'higher', 'jump', 'surge', 'buy', 'growth', 'profit', 'beat', 'bull', 'upgrade', 'high', 'dividend', 'upp', 'köp', 'vinst', 'höjer', 'stiger', 'lyfter', 'rekord', 'soar', 'strong']
@@ -74,7 +114,6 @@ def analyze_news_sentiment(title):
     elif neg_score > pos_score: return "negative"
     else: return "neutral"
 
-# --- Smarta etiketter ---
 def get_label(value, metric_type):
     if value is None or pd.isna(value): return "(Saknas)"
     if metric_type == 'pe':
@@ -98,7 +137,6 @@ def get_label(value, metric_type):
         else: return "(Dålig 🔴)"
     return ""
 
-# --- Smart insiktsgenerator ---
 def generate_insights(pe, peg, div, rsi, ma50, ma200, beta):
     positives, risks = [], []
     if pe is not None and not pd.isna(pe) and pe > 0:
@@ -123,7 +161,6 @@ def generate_insights(pe, peg, div, rsi, ma50, ma200, beta):
     if not risks: risks.append("Hittar inga uppenbara röda flaggor.")
     return positives, risks
 
-# --- Algoritmen för poängberäkning ---
 def calculate_score_100(pe, peg, dividend, recommendation, rsi, macd_diff, ma50, ma200):
     score = 0
     details = {}
@@ -166,14 +203,12 @@ def calculate_score_100(pe, peg, dividend, recommendation, rsi, macd_diff, ma50,
     if dividend is not None and not pd.isna(dividend) and dividend > 0:
         score += 10; details['Utdelning'] = "10 p"
     else: details['Utdelning'] = "0 p"
-
     return score, details
 
 def safe_val(val):
     if pd.isna(val): return None
     return float(val)
 
-# --- Historisk Tidsmaskin ---
 def get_historical_scores(ticker_symbol, current_pe, current_peg, dividend, recommendation):
     ticker = yf.Ticker(ticker_symbol)
     hist = ticker.history(period="2y")
@@ -212,14 +247,14 @@ def get_historical_scores(ticker_symbol, current_pe, current_peg, dividend, reco
         
     return history_dict
 
-# --- Huvudfunktion för datainsamling ---
+# --- Huvudfunktion med CENTRAL CACHE ---
+@st.cache_data(ttl=300, show_spinner=False)
 def fetch_stock_data(ticker_symbol):
     ticker = yf.Ticker(ticker_symbol)
     info = ticker.info
     
-    # Dubbelkoll: Om Yahoo strypt datan (info är tom), tvinga fram ett nytt försök direkt
     if not info or 'shortName' not in info:
-        time.sleep(1) # Vänta en sekund och prova igen
+        time.sleep(1)
         info = ticker.info
         if not info or 'shortName' not in info:
             return None
@@ -277,12 +312,15 @@ def fetch_stock_data(ticker_symbol):
     positives, risks = generate_insights(pe, peg, div, rsi, ma50, ma200, beta)
     historical_scores = get_historical_scores(ticker_symbol, pe, peg, div, recommendation)
     
+    fetch_time = datetime.now().strftime("%H:%M:%S")
+    
     return {
         'info': info, 'score': score, 'breakdown': breakdown, 
         'pe': pe, 'peg': peg, 'div': div, 'rsi': rsi, 'ma50': ma50, 'ma200': ma200,
         'positives': positives, 'risks': risks, 'lower_band': lower_band, 'upper_band': upper_band, 
         'target_price': target_price, 'current_price': current_price, 'currency': currency,
-        'hist_5y': hist_5y, 'historical_scores': historical_scores, 'ticker': ticker_symbol, 'news': news
+        'hist_5y': hist_5y, 'historical_scores': historical_scores, 'ticker': ticker_symbol, 'news': news,
+        'fetch_time': fetch_time
     }
 
 # --- RENDERING FUNKTION FÖR ANALYS ---
@@ -291,6 +329,7 @@ def show_full_analysis(data, ticker, context_key):
         curr_price = data['current_price']
         curr_sym = data.get('currency', '')
         st.subheader(f"Dagens pris: {round(curr_price, 2)} {curr_sym}")
+        st.caption(f"🕒 Siffrorna hämtades från börsen: {data.get('fetch_time', 'Okänt')}")
         
         if data.get('target_price'):
             target = data['target_price']
@@ -299,7 +338,7 @@ def show_full_analysis(data, ticker, context_key):
             sign = "+" if upside > 0 else ""
             st.markdown(f"**Prognos om 1 år (Analytiker):** {round(target, 2)} {curr_sym} (<span style='color:{up_color}'>{sign}{round(upside, 1)}%</span>)", unsafe_allow_html=True)
         else:
-            st.markdown("**Prognos om 1 år:** Saknas hos Yahoo Finance")
+            st.markdown("**Prognos om 1 år:** Saknas")
     
     score = data['score']
     color = "green" if score >= 75 else "orange" if score >= 50 else "red"
@@ -313,10 +352,10 @@ def show_full_analysis(data, ticker, context_key):
     st.markdown("### 🎯 Tekniska Prisnivåer (Köp/Sälj)")
     col_buy, col_sell = st.columns(2)
     with col_buy:
-        if data['lower_band']: st.success(f"**🟢 Köp-stöd (Teknisk botten):**\n\nRunt **{round(data['lower_band'], 2)} {data.get('currency', '')}**\n\n*Priset där aktien historiskt brukar studsa uppåt.*")
+        if data['lower_band']: st.success(f"**🟢 Köp-stöd:**\n\nRunt **{round(data['lower_band'], 2)} {data.get('currency', '')}**")
         else: st.success("**🟢 Köp-stöd:** Data saknas")
     with col_sell:
-        if data['upper_band']: st.error(f"**🔴 Sälj-motstånd (Tekniskt tak):**\n\nRunt **{round(data['upper_band'], 2)} {data.get('currency', '')}**\n\n*Det tekniska 'taket' där aktien historiskt brukar vända ner.*")
+        if data['upper_band']: st.error(f"**🔴 Sälj-motstånd:**\n\nRunt **{round(data['upper_band'], 2)} {data.get('currency', '')}**")
         else: st.error("**🔴 Sälj-motstånd:** Data saknas")
 
     st.markdown("### 📰 Nyheter & Varningsklockor")
@@ -324,15 +363,15 @@ def show_full_analysis(data, ticker, context_key):
     if data['news']['positive']:
         has_news = True
         st.success("**🟢 Positiva Nyheter:**")
-        for n in data['news']['positive']: st.markdown(f"- [{n.get('title') or n.get('headline')}]({n.get('link', '#')}) *(Källa: {n.get('publisher', 'Nyhetskälla')})*")
+        for n in data['news']['positive']: st.markdown(f"- [{n.get('title') or n.get('headline')}]({n.get('link', '#')})")
     if data['news']['negative']:
         has_news = True
-        st.error("**🔴 Negativa Nyheter / Varningsklockor:**")
-        for n in data['news']['negative']: st.markdown(f"- [{n.get('title') or n.get('headline')}]({n.get('link', '#')}) *(Källa: {n.get('publisher', 'Nyhetskälla')})*")
+        st.error("**🔴 Negativa Nyheter:**")
+        for n in data['news']['negative']: st.markdown(f"- [{n.get('title') or n.get('headline')}]({n.get('link', '#')})")
     if data['news']['neutral']:
         has_news = True
         st.info("**⚪ Övriga aktuella nyheter:**")
-        for n in data['news']['neutral']: st.markdown(f"- [{n.get('title') or n.get('headline')}]({n.get('link', '#')}) *(Källa: {n.get('publisher', 'Nyhetskälla')})*")
+        for n in data['news']['neutral']: st.markdown(f"- [{n.get('title') or n.get('headline')}]({n.get('link', '#')})")
     if not has_news:
         st.write("Hittade inga aktuella nyheter för tillfället.")
 
@@ -345,22 +384,22 @@ def show_full_analysis(data, ticker, context_key):
         st.write(f"**Utdelning:** {round(data['div'] * 100, 2) if data['div'] else 0}% {get_label(data['div'], 'div')}")
         st.write(f"**RSI (14):** {round(data['rsi'], 0) if data['rsi'] else '-'} {get_label(data['rsi'], 'rsi')}")
         trend_val = (data['ma50'] - data['ma200']) if (data['ma50'] and data['ma200']) else None
-        st.write(f"**Trend (MA50 vs MA200):** {get_label(trend_val, 'trend')}")
+        st.write(f"**Trend:** {get_label(trend_val, 'trend')}")
     with col2:
         st.subheader("Poäng (Totalt)")
         for k, v in data['breakdown'].items(): st.write(f"**{k}:** {v}")
 
     st.markdown("---")
-    st.markdown("### 📅 Poänghistorik (Senaste 12 månaderna)")
+    st.markdown("### 📅 Poänghistorik")
     if data['historical_scores']:
         hist_df = pd.DataFrame({'Månad': list(data['historical_scores'].keys()), 'Poäng': list(data['historical_scores'].values())})
-        st.altair_chart(alt.Chart(hist_df).mark_bar(color='#2ecc71').encode(x=alt.X('Månad', sort=None, title=''), y=alt.Y('Poäng', title='Poäng', scale=alt.Scale(domain=[0, 100])), tooltip=['Månad', 'Poäng']), use_container_width=True)
+        st.altair_chart(alt.Chart(hist_df).mark_bar(color='#2ecc71').encode(x=alt.X('Månad', sort=None, title=''), y=alt.Y('Poäng', scale=alt.Scale(domain=[0, 100]))), use_container_width=True)
 
-    st.markdown("### 📈 Kursutveckling (Senaste 5 åren)")
+    st.markdown("### 📈 Kursutveckling (5 år)")
     if not data['hist_5y'].empty:
         df_5y = data['hist_5y'].reset_index()
         df_5y.columns = ['Datum', 'Pris']
-        st.altair_chart(alt.Chart(df_5y).mark_line(color='#3498db').encode(x=alt.X('Datum', title=''), y=alt.Y('Pris', title='Aktiekurs', scale=alt.Scale(zero=False)), tooltip=['Datum', 'Pris']), use_container_width=True)
+        st.altair_chart(alt.Chart(df_5y).mark_line(color='#3498db').encode(x=alt.X('Datum', title=''), y=alt.Y('Pris', scale=alt.Scale(zero=False))), use_container_width=True)
 
 # --- Streamlit Gränssnitt ---
 st.set_page_config(page_title="Aktierankaren Pro", page_icon="📈", layout="centered")
@@ -370,12 +409,17 @@ if 'stock_data' not in st.session_state: st.session_state.stock_data = None
 if 'watchlist_data' not in st.session_state: st.session_state.watchlist_data = {}
 if 'search_options' not in st.session_state: st.session_state.search_options = []
 if 'toplist_results' not in st.session_state: st.session_state.toplist_results = []
+if 'winners_list' not in st.session_state: st.session_state.winners_list = []
 
-tab1, tab2, tab3 = st.tabs(["🔍 Sök & Analysera", "⭐ Min Sparlista", "🏆 Top listan"])
+tab1, tab2, tab3, tab4 = st.tabs(["🔍 Sök & Analysera", "⭐ Min Sparlista", "🏆 Top listan", "🚀 Vinnarna"])
 
 # --- FLIK 1: Sök & Analysera ---
 with tab1:
     st.title("📈 Aktierankaren")
+    if st.button("🔄 Rensa appens minne (Hämta allt live igen)"):
+        st.cache_data.clear()
+        st.success("Minnet är rensat! Nästa sökning hämtas helt live.")
+
     with st.form("search_form"):
         name_query = st.text_input("1. Sök företagsnamn eller ticker:", "")
         search_submitted = st.form_submit_button("Sök i registret")
@@ -396,7 +440,6 @@ with tab1:
     if st.session_state.current_ticker and st.session_state.stock_data:
         data = st.session_state.stock_data
         ticker = st.session_state.current_ticker
-        
         st.markdown("---")
         st.header(data['info'].get('shortName', ticker))
         show_full_analysis(data, ticker, "search")
@@ -408,6 +451,7 @@ with tab2:
     if len(watchlist) == 0: st.write("Din sparlista är tom.")
     else:
         if st.button("🔄 Uppdatera alla poäng", key="update_all"):
+            st.cache_data.clear()
             for ticker_symbol in watchlist:
                 with st.spinner(f"Hämtar data för {ticker_symbol}..."):
                     data = fetch_stock_data(ticker_symbol)
@@ -435,7 +479,7 @@ with tab2:
                     if ticker in st.session_state.watchlist_data: del st.session_state.watchlist_data[ticker]
                     st.rerun()
             if data:
-                with st.expander("Visa insikter, Prognos & Prisnivåer"):
+                with st.expander("Visa insikter & Prisnivåer"):
                     if data.get('target_price') and data.get('current_price'):
                         upside = ((data['target_price'] - data['current_price']) / data['current_price']) * 100
                         sign = "+" if upside > 0 else ""
@@ -443,26 +487,27 @@ with tab2:
                     col_pos, col_neg = st.columns(2)
                     with col_pos:
                         st.success("\n".join([f"- {p}" for p in data['positives']]))
-                        if data['lower_band']: st.write(f"**Köp-stöd:** ~{round(data['lower_band'], 2)} {data.get('currency', '')}")
+                        if data['lower_band']: st.write(f"**Köp-stöd:** ~{round(data['lower_band'], 2)}")
                     with col_neg:
                         st.error("\n".join([f"- {r}" for r in data['risks']]))
-                        if data['upper_band']: st.write(f"**Sälj-motstånd:** ~{round(data['upper_band'], 2)} {data.get('currency', '')}")
-                    st.write(f"**Snabbfakta:** P/E: {round(data['pe'], 2) if data['pe'] else '-'} | PEG: {round(data['peg'], 2) if data['peg'] else '-'} | Utdelning: {round(data['div'] * 100, 2) if data['div'] else 0}% | RSI: {round(data['rsi'], 0) if data['rsi'] else '-'}")
+                        if data['upper_band']: st.write(f"**Sälj-motstånd:** ~{round(data['upper_band'], 2)}")
+                    st.write(f"**Snabbfakta:** P/E: {round(data['pe'], 2) if data['pe'] else '-'} | PEG: {round(data['peg'], 2) if data['peg'] else '-'} | Utdelning: {round(data['div'] * 100, 2) if data['div'] else 0}%")
             st.markdown("---")
 
 # --- FLIK 3: Top Listan ---
 with tab3:
     st.title("🏆 Top listan")
-    exchange_choice = st.selectbox("Vilken marknad vill du scanna?", ["Stockholmsbörsen (Top 25)", "Nasdaq US (Top 25 Tech)"])
+    exchange_choice = st.selectbox("Vilken marknad vill du scanna?", ["Stockholmsbörsen (Top 25)", "Nasdaq US (Top 25 Tech)"], key="toplist_select")
     
     if st.button("🔍 Scanna Marknaden (Tar ca 15 sekunder)", type="primary"):
+        st.cache_data.clear()
         tickers_to_scan = STHLM_TICKERS if "Stockholm" in exchange_choice else NASDAQ_TICKERS
         my_bar = st.progress(0, text="Skannar bolagen...")
         results = []
         for i, ticker in enumerate(tickers_to_scan):
             data = fetch_stock_data(ticker)
             if data: results.append(data)
-            time.sleep(0.5) # Paus för att inte bli blockerad!
+            time.sleep(0.5)
             my_bar.progress((i + 1) / len(tickers_to_scan), text=f"Analyserar {ticker} ({i+1}/{len(tickers_to_scan)})...")
         
         top_10 = sorted(results, key=lambda x: x['score'], reverse=True)[:10]
@@ -501,3 +546,36 @@ with tab3:
                 with st.expander(f"📊 Visa hela analysen för {name}"):
                     show_full_analysis(data, ticker, f"top_list_{ticker}")
                 st.markdown("---")
+
+# --- FLIK 4: Vinnarna (NY FLIK) ---
+with tab4:
+    st.title("🚀 Vinnarna (Momentum)")
+    st.write("Gör en blixtsnabb pris-skanning av 50 stora bolag för att hitta vilka som gått bäst de senaste 3 månaderna. Tryck sedan på Analysera för att dyka djupare!")
+    
+    winner_market = st.selectbox("Vilken marknad vill du scanna efter vinnare?", ["Sverige", "Nasdaq"], key="winner_select")
+    
+    if st.button("Hämta Vinnare (3 månader)"):
+        with st.spinner("Skannar prisutvecklingen (tar ca 2-3 sekunder)..."):
+            st.session_state.winners_list = get_top_winners(winner_market)
+            
+    if st.session_state.winners_list:
+        st.markdown("### 🔥 Topp 30 (Högst avkastning 3 mån)")
+        
+        for idx, (ticker, pct) in enumerate(st.session_state.winners_list, 1):
+            with st.expander(f"#{idx} | {ticker} (Upp {round(pct, 1)}%)"):
+                
+                # Om vi redan har tryckt på knappen och hämtat datan, sparar vi den i minnet
+                if f"win_data_{ticker}" not in st.session_state:
+                    if st.button("📊 Analysera denna aktie", key=f"btn_analyze_{ticker}"):
+                        with st.spinner("Hämtar in nyheter, RSI och poäng..."):
+                            fetched_data = fetch_stock_data(ticker)
+                            if fetched_data:
+                                st.session_state[f"win_data_{ticker}"] = fetched_data
+                                st.rerun()
+                            else:
+                                st.error("Kunde inte hämta data för denna.")
+                
+                # Visa datan om den ligger i minnet
+                if f"win_data_{ticker}" in st.session_state:
+                    data = st.session_state[f"win_data_{ticker}"]
+                    show_full_analysis(data, ticker, f"winner_ctx_{ticker}")
